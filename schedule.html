@@ -132,7 +132,7 @@
       );
     }
 
-    // ===== Netlify Blobs API（Functions 代理） =====
+   
     const REMOTE_KEY = 'hb-default';
     const API_BASE = 'https://script.google.com/macros/s/AKfycbxev65tHfnGEPE26CLn6HYoJgpJImU_b9wxV46pRJKgjYA62fDVQjzK9rCjTcM_284TxA/exec';
 
@@ -140,10 +140,16 @@
       try { const res = await fetch(`${API_BASE}?key=${encodeURIComponent(REMOTE_KEY)}`); if (!res.ok) return null; return await res.json(); }
       catch { return null; }
     }
-    async function saveRemoteAll(payload) {
-      const res = await fetch(`${API_BASE}?key=${encodeURIComponent(REMOTE_KEY)}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-      if (!res.ok && res.status !== 204) throw new Error('儲存失敗');
-    }
+async function saveRemoteAll(payload) {
+  const res = await fetch(API_BASE, {
+    method: 'POST',
+    // 用 text/plain 避免 CORS preflight；內容仍然是 JSON 字串
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ key: REMOTE_KEY, payload })
+  });
+  if (!res.ok) throw new Error('儲存失敗');
+}
+
 
     // ===== Portal：休假彈窗置頂 =====
     function Portal({ children }){
@@ -602,7 +608,7 @@
                 <div className="font-medium text-slate-700">雲端儲存與分享</div>
                 <div className="mt-3 flex flex-col gap-2">
                   {!readOnly && (
-                    <button onClick={saveRemote} className="px-3 py-2 rounded-2xl text-sm bg-emerald-600 text-white hover:bg-emerald-700">儲存到雲端（Netlify）</button>
+                    <button onClick={saveRemote} className="px-3 py-2 rounded-2xl text-sm bg-emerald-600 text-white hover:bg-emerald-700">儲存到雲端</button>
                   )}
                   <div className="flex gap-2">
                     <button onClick={()=>copyShare(true)} className="flex-1 px-3 py-2 rounded-2xl text-sm border bg-white hover:bg-slate-50">複製唯讀分享連結</button>
