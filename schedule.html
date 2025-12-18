@@ -476,8 +476,6 @@
         }); return t;
       }, [assignments, employees, year, month]);
 
-      const { weeks } = useMemo(()=>buildMonthMatrix(year, month), [year, month]);
-
       // 分享：以目前狀態組包
       const makeShareUrl = (isReadOnly) => {
         const payload = { v: 2, year, month, employees, colorMap, vacations, assignmentsByYM: { ...assignmentsByYM, [ymKey(year, month)]: assignments } };
