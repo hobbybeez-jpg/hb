@@ -661,7 +661,7 @@ const emptyRoles = () => ({ 'S':null, 'P':null, 'F':null, 'M':null, '':null });
                     <div className="grid grid-cols-7 gap-2 text-center text-slate-500 text-sm mb-2">
                       {['週日','週一','週二','週三','週四','週五','週六'].map((w) => (<div key={w} className="font-medium">{w}</div>))}
                     </div>
-                    <div className="grid grid-cols-7 gap-2 auto-rows-fr">
+                    <div className="grid grid-cols-7 gap-2 auto-rows-auto">
                       {weeks.flat().map((c, idx) => c.type === 'pad' ? (
                         <div key={idx} className="min-h-36 rounded-2xl bg-slate-50 border border-dashed"></div>
                       ) : (
