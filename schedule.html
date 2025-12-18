@@ -224,8 +224,10 @@
     }
 
     // ====== 角色欄位設定 ======
-    const ROLE_LIST = ['Shipper','Packer','Front','Media'];
-    const emptyRoles = () => ({ Shipper:null, Packer:null, Front:null, Media:null });
+// 用縮寫 S / P / F / M，並加第 5 欄（空標籤）
+const ROLE_LIST = ['S','P','F','M','']; 
+const emptyRoles = () => ({ 'S':null, 'P':null, 'F':null, 'M':null, '':null });
+
 
     function normalizeDayAssign(val){
       // 舊資料相容：array -> {staff:[...], roles:{...}}
@@ -749,7 +751,8 @@
 
         return (
           <div ref={boxRef} className="flex items-center gap-2 p-2 rounded-lg border border-slate-200 min-h-[40px]">
-            <span className="text-xs text-slate-500 w-16 shrink-0">{role}</span>
+            <span className="text-[10px] text-slate-500 w-4 shrink-0 text-center">{role}</span>
+
             {emp ? (
               <div
                 className={`flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11px] ${getEmpColor(emp.id)}`}
@@ -814,9 +817,10 @@
           </div>
 
           {/* 角色欄位 */}
-          <div className="grid grid-cols-1 gap-1">
-            {ROLE_LIST.map(r => <RoleBox key={r} role={r} />)}
-          </div>
+<div className="grid grid-cols-5 gap-1">
+  {ROLE_LIST.map(r => <RoleBox key={r || 'X'} role={r} />)}
+</div>
+
         </div>
       );
     }
