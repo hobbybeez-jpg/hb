@@ -134,7 +134,7 @@
 
    
     const REMOTE_KEY = 'hb-default';
-    const API_BASE = 'https://script.google.com/macros/s/AKfycbxev65tHfnGEPE26CLn6HYoJgpJImU_b9wxV46pRJKgjYA62fDVQjzK9rCjTcM_284TxA/exec';
+    const API_BASE = 'https://script.google.com/macros/s/AKfycbyLdqjUzpDNA8vec9plpXOGU2QdNLa7WPIVZ_HAFpiVGyIjg4g0vb2R1mOTeuCBAFCFRQ/exec';
 
     async function loadRemoteAll() {
       try { const res = await fetch(`${API_BASE}?key=${encodeURIComponent(REMOTE_KEY)}`); if (!res.ok) return null; return await res.json(); }
