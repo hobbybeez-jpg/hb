@@ -178,7 +178,7 @@
         return ()=>{ window.removeEventListener('keydown', onKey); window.removeEventListener('scroll', onScroll); };
       }, [onClose]);
 
-      const { weeks } = useMemo(()=>buildMonthMatrix(y, m), [y, m]);
+      
 
       return (
         <Portal>
