@@ -348,9 +348,12 @@
 
     // ===== App =====
     function App() {
-      // 預設月份
-      const [year, setYear] = useState(2025);
-      const [month, setMonth] = useState(8);
+
+// 預設自動跳到當月份
+const today = new Date();
+const [year, setYear] = useState(today.getFullYear());
+const [month, setMonth] = useState(today.getMonth()); // 0-11
+
 
       const [nameInput, setNameInput] = useState("");
       const [employees, setEmployees] = useState([]);
