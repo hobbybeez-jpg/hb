@@ -60,7 +60,11 @@
     const EXTENDED_KEYS = [...DISTINCT_KEYS,'rose','cyan','indigo','lime','fuchsia','pink','purple','sky','slate','stone','green'];
     const colorClassForKey = (key) => `bg-${key}-200 border-${key}-700 text-${key}-900`;
 
-    function hashStr(s){ let h = 2166136261 >>> 0; for (let i=0; i<s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+    function hashStr(s){
+      let h = 2166136261 >>> 0;
+      for (let i=0; i<s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+      return h >>> 0;
+    }
     function computeColorMap(employees, existingMap={}){
       const ids = new Set(employees.map(e=>e.id));
       const map = {};
@@ -171,7 +175,8 @@
         let left = anchor.x; let top = anchor.y;
         if (left + width + PADDING > window.innerWidth) left = window.innerWidth - width - PADDING;
         if (top + height + PADDING > window.innerHeight) top = window.innerHeight - height - PADDING;
-        if (left < PADDING) left = PADDING; if (top < PADDING) top = PADDING;
+        if (left < PADDING) left = PADDING;
+        if (top < PADDING) top = PADDING;
         setPos({ left, top });
       }, [anchor]);
 
@@ -228,102 +233,83 @@
       );
     }
 
-    // ===== 簡潔版：名牌清單 + 職位圓圈（點擊切換），且 S/P/F/M 永遠排最上方 =====
+    // ===== Roles（職位可重複，同職位多人；顯示排序 S>P>F>M>無職位，同職位內依加入順序）=====
     const ROLE_KEYS = ['S','P','F','M'];
 
+    function roleRank(role){
+      const idx = ROLE_KEYS.indexOf(role);
+      return idx >= 0 ? idx : 999;
+    }
+
     function normalizeDayEntry(entry){
-      const empty = { roles:{S:null,P:null,F:null,M:null}, order:[] };
+      // Canonical: { order:[empId...], roleById:{[empId]: 'S'|'P'|'F'|'M'|null } }
+      const empty = { order: [], roleById: {} };
       if (!entry) return empty;
 
+      // Legacy A: [empId...]
       if (Array.isArray(entry)) {
-        const roles = {S:null,P:null,F:null,M:null};
+        const roleById = {};
         const order = [];
         entry.forEach((id, idx) => {
-          const rk = ROLE_KEYS[idx];
-          if (rk && !roles[rk]) roles[rk] = id;
           order.push(id);
+          roleById[id] = ROLE_KEYS[idx % ROLE_KEYS.length] || null;
         });
-        const roleTop = ROLE_KEYS.map(rk => roles[rk]).filter(Boolean);
-        const rest = order.filter(id => !roleTop.includes(id));
-        return { roles, order: Array.from(new Set([...roleTop, ...rest])) };
+        return { order: Array.from(new Set(order)), roleById };
       }
 
-      if (entry && entry.roles && Array.isArray(entry.others)) {
-        const roles = {
-          S: entry.roles.S ?? null,
-          P: entry.roles.P ?? null,
-          F: entry.roles.F ?? null,
-          M: entry.roles.M ?? null,
-        };
-        const roleTop = ROLE_KEYS.map(rk => roles[rk]).filter(Boolean);
-        const rest = entry.others.filter(id => !roleTop.includes(id));
-        return { roles, order: Array.from(new Set([...roleTop, ...rest])) };
+      // Legacy B (unique roles): { roles:{S,P,F,M}, order:[...] }
+      if (entry && entry.roles && Array.isArray(entry.order)) {
+        const roleById = {};
+        for (const rk of ROLE_KEYS) {
+          const id = entry.roles[rk];
+          if (id != null) roleById[id] = rk;
+        }
+        entry.order.forEach(id => { if (roleById[id] == null) roleById[id] = null; });
+        return { order: Array.from(new Set(entry.order)), roleById };
       }
 
-      const roles = entry.roles || {};
-      const out = {
-        roles: {
-          S: roles.S ?? null,
-          P: roles.P ?? null,
-          F: roles.F ?? null,
-          M: roles.M ?? null,
-        },
-        order: Array.isArray(entry.order) ? entry.order.slice() : []
-      };
-
-      const roleTop = ROLE_KEYS.map(rk => out.roles[rk]).filter(Boolean);
-      const rest = (out.order || []).filter(id => !roleTop.includes(id));
-      out.order = Array.from(new Set([...roleTop, ...rest]));
-      return out;
+      // Current
+      const order = Array.isArray(entry.order) ? entry.order.slice() : [];
+      const roleById = entry.roleById ? { ...entry.roleById } : {};
+      order.forEach(id => { if (!(id in roleById)) roleById[id] = null; });
+      return { order: Array.from(new Set(order)), roleById };
     }
 
     function findRoleOfEmp(dayEntry, empId){
       const d = normalizeDayEntry(dayEntry);
-      for (const rk of ROLE_KEYS) if (d.roles[rk] === empId) return rk;
-      return null;
-    }
-
-    function removeEmpFromDayEntry(dayEntry, empId){
-      const d = normalizeDayEntry(dayEntry);
-      for (const rk of ROLE_KEYS) if (d.roles[rk] === empId) d.roles[rk] = null;
-      d.order = (d.order || []).filter(id => id !== empId);
-      return d;
+      return d.roleById?.[empId] ?? null;
     }
 
     function ensureEmpInOrder(dayEntry, empId){
       const d = normalizeDayEntry(dayEntry);
       if (!d.order.includes(empId)) d.order = [...d.order, empId];
-      return normalizeDayEntry(d);
+      if (!(empId in d.roleById)) d.roleById[empId] = null;
+      return d;
+    }
+
+    function removeEmpFromDayEntry(dayEntry, empId){
+      const d = normalizeDayEntry(dayEntry);
+      d.order = d.order.filter(id => id !== empId);
+      if (d.roleById) delete d.roleById[empId];
+      return d;
     }
 
     function addEmpAuto(dayEntry, empId){
       let d = normalizeDayEntry(dayEntry);
-      if (d.order.includes(empId) || findRoleOfEmp(d, empId)) return d;
+      if (d.order.includes(empId)) return d;
 
-      for (const rk of ROLE_KEYS) {
-        if (!d.roles[rk]) {
-          d.roles[rk] = empId;
-          d = ensureEmpInOrder(d, empId);
-          return d;
-        }
-      }
       d = ensureEmpInOrder(d, empId);
+
+      // Default role by insertion position: 1st S, 2nd P, 3rd F, 4th M, 5th S...
+      const idx = d.order.indexOf(empId);
+      d.roleById[empId] = ROLE_KEYS[idx % ROLE_KEYS.length];
       return d;
     }
 
     function setEmpRole(dayEntry, empId, nextRole){
-      let d = normalizeDayEntry(dayEntry);
-      d = ensureEmpInOrder(d, empId);
-
-      for (const rk of ROLE_KEYS) if (d.roles[rk] === empId) d.roles[rk] = null;
-
-      if (!nextRole) return normalizeDayEntry(d);
-
-      const existing = d.roles[nextRole];
-      if (existing && existing !== empId) d.roles[nextRole] = null;
-
-      d.roles[nextRole] = empId;
-      return normalizeDayEntry(d);
+      let d = ensureEmpInOrder(dayEntry, empId);
+      d.roleById[empId] = nextRole || null;
+      return d;
     }
 
     function cycleRole(currentRole){
@@ -341,25 +327,45 @@
       const [item] = arr.splice(from, 1);
       arr.splice(to, 0, item);
       d.order = arr;
-      return normalizeDayEntry(d);
+      return d;
     }
 
+    function getDisplayOrder(dayEntry){
+      const d = normalizeDayEntry(dayEntry);
+      const indexMap = new Map(d.order.map((id, i) => [id, i]));
+      return d.order.slice().sort((a,b)=>{
+        const ra = roleRank(d.roleById?.[a]);
+        const rb = roleRank(d.roleById?.[b]);
+        if (ra !== rb) return ra - rb;
+        return (indexMap.get(a) ?? 0) - (indexMap.get(b) ?? 0);
+      });
+    }
+
+    function isDayEntryEmpty(dayEntry){
+      const d = normalizeDayEntry(dayEntry);
+      return (d.order || []).length === 0;
+    }
+
+    // ===== App =====
     function App() {
+      // 預設月份
       const [year, setYear] = useState(2025);
       const [month, setMonth] = useState(8);
 
       const [nameInput, setNameInput] = useState("");
       const [employees, setEmployees] = useState([]);
-      const [assignments, setAssignments] = useState({});
-      const [assignmentsByYM, setAssignmentsByYM] = useState({});
+      const [assignments, setAssignments] = useState({}); // 當月：day -> dayEntry
+      const [assignmentsByYM, setAssignmentsByYM] = useState({}); // 全部月份
       const [colorMap, setColorMap] = useState({});
-      const [vacations, setVacations] = useState({});
+      const [vacations, setVacations] = useState({}); // { [empId]: { 'YYYY-MM-DD': true } }
 
       const [highlightEmpId, setHighlightEmpId] = useState(null);
       const [readOnly, setReadOnly] = useState(false);
       const [saved, setSaved] = useState(false);
-      const [vacEditEmp, setVacEditEmp] = useState(null);
 
+      const [vacEditEmp, setVacEditEmp] = useState(null); // {emp, anchor:{x,y}}
+
+      // 解析唯讀/分享
       useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         setReadOnly(params.get('readOnly') === '1');
@@ -367,7 +373,7 @@
         if (hash.startsWith('#s=')) {
           try {
             const payload = decodeShare(hash.slice(3));
-            if (payload && (payload.v === 1 || payload.v === 2)) {
+            if (payload && (payload.v === 1 || payload.v === 2 || payload.v === 3)) {
               setYear(payload.year); setMonth(payload.month);
               setEmployees(payload.employees || []);
               if (payload.assignmentsByYM) {
@@ -380,10 +386,13 @@
               setVacations(payload.vacations || {});
               setReadOnly(true);
             }
-          } catch (e) { console.warn('共享連結解析失敗', e); }
+          } catch (e) {
+            console.warn('共享連結解析失敗', e);
+          }
         }
       }, []);
 
+      // 啟動時載入雲端資料
       useEffect(() => {
         (async () => {
           const remote = await loadRemoteAll();
@@ -398,11 +407,13 @@
         })();
       }, []);
 
+      // 員工顏色保持穩定
       useEffect(() => {
         const next = computeColorMap(employees, colorMap);
         if (JSON.stringify(next) !== JSON.stringify(colorMap)) setColorMap(next);
       }, [employees]);
 
+      // 切換月份時載入當月資料
       useEffect(() => {
         setAssignments(assignmentsByYM[ymKey(year, month)] || {});
       }, [year, month, assignmentsByYM]);
@@ -435,7 +446,8 @@
 
       const addEmployee = () => {
         if (readOnly) return;
-        const name = nameInput.trim(); if (!name) return;
+        const name = nameInput.trim();
+        if (!name) return;
         const id = Date.now() + Math.random();
         const newEmp = { id, name };
         const nextEmployees = [...employees, newEmp];
@@ -452,8 +464,7 @@
           const next = { ...prev };
           Object.keys(next).forEach(day => {
             const cleaned = removeEmpFromDayEntry(next[day], empId);
-            const empty = cleaned.order.length === 0 && ROLE_KEYS.every(rk => !cleaned.roles[rk]);
-            if (empty) delete next[day];
+            if (isDayEntryEmpty(cleaned)) delete next[day];
             else next[day] = cleaned;
           });
           return next;
@@ -477,7 +488,12 @@
 
         let d2 = null; d2 = addEmpAuto(d2, emps[0].id); d2 = addEmpAuto(d2, emps[1].id);
         let d5 = null; d5 = addEmpAuto(d5, emps[2].id);
-        let d9 = null; d9 = addEmpAuto(d9, emps[3].id); d9 = addEmpAuto(d9, emps[0].id); d9 = addEmpAuto(d9, emps[1].id); d9 = addEmpAuto(d9, emps[2].id); d9 = addEmpAuto(d9, emps[4].id);
+        let d9 = null;
+        d9 = addEmpAuto(d9, emps[3].id);
+        d9 = addEmpAuto(d9, emps[0].id);
+        d9 = addEmpAuto(d9, emps[1].id);
+        d9 = addEmpAuto(d9, emps[2].id);
+        d9 = addEmpAuto(d9, emps[4].id);
 
         setEmployees(emps);
         setAssignments({ '2': d2, '5': d5, '9': d9 });
@@ -502,7 +518,8 @@
       const addToDay = (day, empId) => {
         setAssignments(prev => {
           const next = { ...prev };
-          next[String(day)] = addEmpAuto(next[String(day)], empId);
+          const key = String(day);
+          next[key] = addEmpAuto(next[key], empId);
           return next;
         });
       };
@@ -512,24 +529,24 @@
           const next = { ...prev };
           const key = String(day);
           const cleaned = removeEmpFromDayEntry(next[key], empId);
-          const empty = cleaned.order.length === 0 && ROLE_KEYS.every(rk => !cleaned.roles[rk]);
-          if (empty) delete next[key];
+          if (isDayEntryEmpty(cleaned)) delete next[key];
           else next[key] = cleaned;
           return next;
         });
       };
 
+      // Drop payload (from list or from cell)
       const moveOrCopyToDay = (day, payload) => {
         const { empId, fromDay, fromIndex, dropIndex } = payload || {};
         if (empId == null) return;
 
         setAssignments(prev => {
           const next = { ...prev };
+          const dstKey = String(day);
 
-          // If moving within same day -> reorder directly (fast path)
+          // Move within same day: reorder base order (tie-breaker within same role group)
           if (fromDay && Number(fromDay) === Number(day) && typeof fromIndex === 'number' && typeof dropIndex === 'number') {
-            const key = String(day);
-            next[key] = reorderInDay(next[key], fromIndex, dropIndex);
+            next[dstKey] = reorderInDay(next[dstKey], fromIndex, dropIndex);
             return next;
           }
 
@@ -537,16 +554,17 @@
           if (fromDay) {
             const srcKey = String(fromDay);
             const cleaned = removeEmpFromDayEntry(next[srcKey], empId);
-            const empty = cleaned.order.length === 0 && ROLE_KEYS.every(rk => !cleaned.roles[rk]);
-            if (empty) delete next[srcKey];
+            if (isDayEntryEmpty(cleaned)) delete next[srcKey];
             else next[srcKey] = cleaned;
           }
 
-          const dstKey = String(day);
+          // Add to target day
           let dst = addEmpAuto(next[dstKey], empId);
 
+          // Reorder to end by default
           if (typeof dropIndex === 'number') {
-            const idx = dst.order.indexOf(empId);
+            const baseOrder = normalizeDayEntry(dst).order;
+            const idx = baseOrder.indexOf(empId);
             if (idx >= 0) dst = reorderInDay(dst, idx, dropIndex);
           }
 
@@ -558,7 +576,8 @@
       const setRoleForDay = (day, empId, roleOrNull) => {
         setAssignments(prev => {
           const next = { ...prev };
-          next[String(day)] = setEmpRole(next[String(day)], empId, roleOrNull);
+          const key = String(day);
+          next[key] = setEmpRole(next[key], empId, roleOrNull);
           return next;
         });
       };
@@ -595,7 +614,7 @@
       // Share
       const makeShareUrl = (isReadOnly) => {
         const payload = {
-          v: 2, year, month, employees, colorMap, vacations,
+          v: 3, year, month, employees, colorMap, vacations,
           assignmentsByYM: { ...assignmentsByYM, [ymKey(year, month)]: assignments }
         };
         const u = new URL(window.location.href);
@@ -707,7 +726,8 @@
                             <tr key={emp.id} className={"border-t " + (highlightEmpId===emp.id? 'bg-blue-50':'') }>
                               <td className="py-1">
                                 <div className="flex items-center">
-                                  <button className="text-slate-700 hover:underline flex items-center gap-1 whitespace-nowrap" onClick={()=> setHighlightEmpId(highlightEmpId===emp.id? null: emp.id)}>
+                                  <button className="text-slate-700 hover:underline flex items-center gap-1 whitespace-nowrap"
+                                          onClick={()=> setHighlightEmpId(highlightEmpId===emp.id? null: emp.id)}>
                                     <span className="font-semibold sm:hidden">{abbr(emp.name)}</span>
                                     <span className="hidden sm:inline truncate max-w-[10rem]">{emp.name}</span>
                                   </button>
@@ -853,7 +873,9 @@
       const h = hoursForDate(year, month, d);
       const norm = useMemo(() => normalizeDayEntry(dayEntry), [dayEntry]);
 
-      const assignedAll = norm.order || [];
+      // 依 S>P>F>M>無職位 顯示排序（同職位內依加入順序）
+      const assignedAll = useMemo(() => getDisplayOrder(norm), [norm]);
+
       const isHL = highlightEmpId != null && assignedAll.includes(highlightEmpId);
       const isVacHL = highlightEmpId != null && isVacation(highlightEmpId, year, month, d);
 
@@ -878,7 +900,7 @@
         return map[role] || { txt: role, cls:'bg-slate-500 text-white' };
       };
 
-      const renderChip = (empId, index) => {
+      const renderChip = (empId, displayIndex) => {
         const emp = empList.find(e => e.id === empId);
         if (!emp) return null;
 
@@ -896,12 +918,15 @@
           onSetRole(empId, next);
         };
 
+        // 重要：拖曳排序使用 base order 的 index（不是 displayIndex）
+        const baseIndex = normalizeDayEntry(norm).order.indexOf(empId);
+
         return (
           <li
             key={empId}
             className={"flex items-center gap-2 px-2 py-1 rounded-xl border " + color + " " + ring + (vacToday ? ' border-rose-500' : '')}
             draggable={!readOnly}
-            onDragStart={(e)=>onDragStartFromCell(e, empId, d, index)}
+            onDragStart={(e)=>onDragStartFromCell(e, empId, d, baseIndex)}
             title={emp.name}
           >
             <button
@@ -930,7 +955,7 @@
         );
       };
 
-      // Capture: whole cell is always droppable even when cursor overlaps chips
+      // Capture：整格都能接 drop，就算滑在名牌上也能放入
       const onDragOverCapture = (e) => {
         if (!allowDrop(e)) { e.dataTransfer.dropEffect = 'none'; return; }
         e.preventDefault();
@@ -944,7 +969,9 @@
           const data = JSON.parse(e.dataTransfer.getData('text/plain'));
           const empId = data?.empId;
           if (empId == null) return;
-          if (data.fromDay) onDropPayload(d, { ...data, dropIndex: assignedAll.length });
+
+          // 預設放到最後（base order）
+          if (data.fromDay) onDropPayload(d, { ...data, dropIndex: normalizeDayEntry(norm).order.length });
           else onAdd(empId);
         } catch {}
       };
