@@ -83,7 +83,7 @@
     function buildMonthMatrix(year, month){
       const total = daysInMonth(year, month);
       const firstDow = new Date(year, month, 1).getDay(); // 0..6 Sun..Sat
-      const leading = firstDow; // 週日置前
+      const leading = firstDow;
       const slots = leading + total;
       const weekCount = Math.ceil(slots / 7);
       const weeks = Array.from({length: weekCount}, ()=> Array(7).fill(null).map(()=>({type:'pad'})));
@@ -228,15 +228,13 @@
       );
     }
 
-    // ===== GAS 風格簡潔版：名牌清單 + 職位圓圈（點擊切換）=====
+    // ===== 簡潔版：名牌清單 + 職位圓圈（點擊切換），且 S/P/F/M 永遠排最上方 =====
     const ROLE_KEYS = ['S','P','F','M'];
 
     function normalizeDayEntry(entry){
-      // Canonical: { roles:{S,P,F,M}, order:[empId...] }
       const empty = { roles:{S:null,P:null,F:null,M:null}, order:[] };
       if (!entry) return empty;
 
-      // Old format A: [empId...]
       if (Array.isArray(entry)) {
         const roles = {S:null,P:null,F:null,M:null};
         const order = [];
@@ -245,10 +243,11 @@
           if (rk && !roles[rk]) roles[rk] = id;
           order.push(id);
         });
-        return { roles, order: Array.from(new Set(order)) };
+        const roleTop = ROLE_KEYS.map(rk => roles[rk]).filter(Boolean);
+        const rest = order.filter(id => !roleTop.includes(id));
+        return { roles, order: Array.from(new Set([...roleTop, ...rest])) };
       }
 
-      // Old format B: { roles, others }
       if (entry && entry.roles && Array.isArray(entry.others)) {
         const roles = {
           S: entry.roles.S ?? null,
@@ -256,12 +255,11 @@
           F: entry.roles.F ?? null,
           M: entry.roles.M ?? null,
         };
-        const roleIds = ROLE_KEYS.map(rk => roles[rk]).filter(Boolean);
-        const order = Array.from(new Set([...roleIds, ...entry.others]));
-        return { roles, order };
+        const roleTop = ROLE_KEYS.map(rk => roles[rk]).filter(Boolean);
+        const rest = entry.others.filter(id => !roleTop.includes(id));
+        return { roles, order: Array.from(new Set([...roleTop, ...rest])) };
       }
 
-      // Current format
       const roles = entry.roles || {};
       const out = {
         roles: {
@@ -273,10 +271,9 @@
         order: Array.isArray(entry.order) ? entry.order.slice() : []
       };
 
-      const roleIds = ROLE_KEYS.map(rk => out.roles[rk]).filter(Boolean);
-      const set = new Set(out.order);
-      roleIds.forEach(id => { if (!set.has(id)) out.order.unshift(id); });
-      out.order = Array.from(new Set(out.order));
+      const roleTop = ROLE_KEYS.map(rk => out.roles[rk]).filter(Boolean);
+      const rest = (out.order || []).filter(id => !roleTop.includes(id));
+      out.order = Array.from(new Set([...roleTop, ...rest]));
       return out;
     }
 
@@ -296,7 +293,7 @@
     function ensureEmpInOrder(dayEntry, empId){
       const d = normalizeDayEntry(dayEntry);
       if (!d.order.includes(empId)) d.order = [...d.order, empId];
-      return d;
+      return normalizeDayEntry(d);
     }
 
     function addEmpAuto(dayEntry, empId){
@@ -318,17 +315,15 @@
       let d = normalizeDayEntry(dayEntry);
       d = ensureEmpInOrder(d, empId);
 
-      // clear emp current role
       for (const rk of ROLE_KEYS) if (d.roles[rk] === empId) d.roles[rk] = null;
 
-      if (!nextRole) return d;
+      if (!nextRole) return normalizeDayEntry(d);
 
-      // if occupied, remove existing role occupant (keeps in order)
       const existing = d.roles[nextRole];
       if (existing && existing !== empId) d.roles[nextRole] = null;
 
       d.roles[nextRole] = empId;
-      return d;
+      return normalizeDayEntry(d);
     }
 
     function cycleRole(currentRole){
@@ -346,28 +341,25 @@
       const [item] = arr.splice(from, 1);
       arr.splice(to, 0, item);
       d.order = arr;
-      return d;
+      return normalizeDayEntry(d);
     }
 
     function App() {
-      // 預設 2025-09
       const [year, setYear] = useState(2025);
       const [month, setMonth] = useState(8);
 
       const [nameInput, setNameInput] = useState("");
       const [employees, setEmployees] = useState([]);
-      const [assignments, setAssignments] = useState({}); // 當月：day -> dayEntry
-      const [assignmentsByYM, setAssignmentsByYM] = useState({}); // 全部月份
+      const [assignments, setAssignments] = useState({});
+      const [assignmentsByYM, setAssignmentsByYM] = useState({});
       const [colorMap, setColorMap] = useState({});
-      const [vacations, setVacations] = useState({}); // { [empId]: { 'YYYY-MM-DD': true } }
+      const [vacations, setVacations] = useState({});
 
       const [highlightEmpId, setHighlightEmpId] = useState(null);
       const [readOnly, setReadOnly] = useState(false);
       const [saved, setSaved] = useState(false);
+      const [vacEditEmp, setVacEditEmp] = useState(null);
 
-      const [vacEditEmp, setVacEditEmp] = useState(null); // {emp, anchor:{x,y}}
-
-      // 解析唯讀/分享
       useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         setReadOnly(params.get('readOnly') === '1');
@@ -392,7 +384,6 @@
         }
       }, []);
 
-      // 啟動時嘗試載入雲端資料
       useEffect(() => {
         (async () => {
           const remote = await loadRemoteAll();
@@ -407,13 +398,11 @@
         })();
       }, []);
 
-      // 員工顏色保持穩定
       useEffect(() => {
         const next = computeColorMap(employees, colorMap);
         if (JSON.stringify(next) !== JSON.stringify(colorMap)) setColorMap(next);
       }, [employees]);
 
-      // 切換月份時載入當月資料
       useEffect(() => {
         setAssignments(assignmentsByYM[ymKey(year, month)] || {});
       }, [year, month, assignmentsByYM]);
@@ -442,10 +431,7 @@
       const monthLabel = (y, m) => `${y} 年 ${String(m+1).padStart(2,'0')} 月`;
       const abbr = (name) => (name || '').trim().slice(0,3).toUpperCase();
 
-      const getEmpColor = (empId) => {
-        const key = colorMap[empId];
-        return colorClassForKey(key || 'emerald');
-      };
+      const getEmpColor = (empId) => colorClassForKey(colorMap[empId] || 'emerald');
 
       const addEmployee = () => {
         if (readOnly) return;
@@ -489,25 +475,12 @@
           { id: base+7, name: 'Gina' },
         ];
 
-        // Use new format by calling addEmpAuto and setEmpRole
-        let d2 = null;
-        d2 = addEmpAuto(d2, emps[0].id);
-        d2 = addEmpAuto(d2, emps[1].id);
-
-        let d5 = null;
-        d5 = addEmpAuto(d5, emps[2].id);
-
-        let d9 = null;
-        d9 = addEmpAuto(d9, emps[3].id);
-        d9 = addEmpAuto(d9, emps[0].id);
-        d9 = addEmpAuto(d9, emps[1].id);
-        d9 = addEmpAuto(d9, emps[2].id);
-        d9 = addEmpAuto(d9, emps[4].id);
-
-        const asg = { '2': d2, '5': d5, '9': d9 };
+        let d2 = null; d2 = addEmpAuto(d2, emps[0].id); d2 = addEmpAuto(d2, emps[1].id);
+        let d5 = null; d5 = addEmpAuto(d5, emps[2].id);
+        let d9 = null; d9 = addEmpAuto(d9, emps[3].id); d9 = addEmpAuto(d9, emps[0].id); d9 = addEmpAuto(d9, emps[1].id); d9 = addEmpAuto(d9, emps[2].id); d9 = addEmpAuto(d9, emps[4].id);
 
         setEmployees(emps);
-        setAssignments(asg);
+        setAssignments({ '2': d2, '5': d5, '9': d9 });
         setColorMap(computeColorMap(emps, {}));
         setVacations({
           [emps[0].id]: { [dateStr(2025,8,7)]: true, [dateStr(2025,8,14)]: true },
@@ -529,8 +502,7 @@
       const addToDay = (day, empId) => {
         setAssignments(prev => {
           const next = { ...prev };
-          const key = String(day);
-          next[key] = addEmpAuto(next[key], empId);
+          next[String(day)] = addEmpAuto(next[String(day)], empId);
           return next;
         });
       };
@@ -548,12 +520,20 @@
       };
 
       const moveOrCopyToDay = (day, payload) => {
-        const { empId, fromDay, dropIndex } = payload || {};
+        const { empId, fromDay, fromIndex, dropIndex } = payload || {};
         if (empId == null) return;
 
         setAssignments(prev => {
           const next = { ...prev };
 
+          // If moving within same day -> reorder directly (fast path)
+          if (fromDay && Number(fromDay) === Number(day) && typeof fromIndex === 'number' && typeof dropIndex === 'number') {
+            const key = String(day);
+            next[key] = reorderInDay(next[key], fromIndex, dropIndex);
+            return next;
+          }
+
+          // Remove from source day if moving from another day
           if (fromDay) {
             const srcKey = String(fromDay);
             const cleaned = removeEmpFromDayEntry(next[srcKey], empId);
@@ -578,8 +558,7 @@
       const setRoleForDay = (day, empId, roleOrNull) => {
         setAssignments(prev => {
           const next = { ...prev };
-          const key = String(day);
-          next[key] = setEmpRole(next[key], empId, roleOrNull);
+          next[String(day)] = setEmpRole(next[String(day)], empId, roleOrNull);
           return next;
         });
       };
@@ -587,14 +566,12 @@
       const totals = useMemo(() => {
         const t = Object.create(null);
         employees.forEach(e => t[e.id] = 0);
-
         Object.entries(assignments).forEach(([day, entry]) => {
           const d = Number(day);
           const h = hoursForDate(year, month, d);
           const norm = normalizeDayEntry(entry);
           norm.order.forEach(id => { if (t[id] != null) t[id] += h; });
         });
-
         return t;
       }, [assignments, employees, year, month]);
 
@@ -873,7 +850,6 @@
       onDragStartFromCell,
       isVacation
     }) {
-      const ref = useRef(null);
       const h = hoursForDate(year, month, d);
       const norm = useMemo(() => normalizeDayEntry(dayEntry), [dayEntry]);
 
@@ -890,35 +866,6 @@
         } catch {}
         return true;
       };
-
-      // whole cell drop: add auto role
-      useEffect(() => {
-        const el = ref.current; if (!el) return;
-
-        const onDragOver = (e) => {
-          if (!allowDrop(e)) { e.dataTransfer.dropEffect = 'none'; return; }
-          e.preventDefault();
-          e.dataTransfer.dropEffect = 'copy';
-        };
-
-        const onDrop = (e) => {
-          if (!allowDrop(e)) return;
-          e.preventDefault();
-          try {
-            const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-            const empId = data?.empId;
-            if (empId == null) return;
-
-            // If moved from another day, drop to end by default
-            if (data.fromDay) onDropPayload(d, { ...data, dropIndex: assignedAll.length });
-            else onAdd(empId);
-          } catch {}
-        };
-
-        el.addEventListener('dragover', onDragOver);
-        el.addEventListener('drop', onDrop);
-        return () => { el.removeEventListener('dragover', onDragOver); el.removeEventListener('drop', onDrop); };
-      }, [d, readOnly, year, month, assignedAll.length]);
 
       const roleBadge = (role) => {
         if (!role) return { txt: '', cls: 'bg-slate-200 text-slate-700' };
@@ -949,30 +896,12 @@
           onSetRole(empId, next);
         };
 
-        const onDragStart = (e) => onDragStartFromCell(e, empId, d, index);
-
-        const onDropHere = (e) => {
-          if (!allowDrop(e)) return;
-          e.preventDefault();
-          try {
-            const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-            const draggedId = data?.empId;
-            if (draggedId == null) return;
-
-            // reorder or insert
-            if (data.fromDay) onDropPayload(d, { ...data, dropIndex: index });
-            else onDropPayload(d, { empId: draggedId, dropIndex: index });
-          } catch {}
-        };
-
         return (
           <li
             key={empId}
             className={"flex items-center gap-2 px-2 py-1 rounded-xl border " + color + " " + ring + (vacToday ? ' border-rose-500' : '')}
             draggable={!readOnly}
-            onDragStart={onDragStart}
-            onDragOver={(e)=>{ if (allowDrop(e)) { e.preventDefault(); e.dataTransfer.dropEffect='move'; } }}
-            onDrop={onDropHere}
+            onDragStart={(e)=>onDragStartFromCell(e, empId, d, index)}
             title={emp.name}
           >
             <button
@@ -1001,13 +930,33 @@
         );
       };
 
+      // Capture: whole cell is always droppable even when cursor overlaps chips
+      const onDragOverCapture = (e) => {
+        if (!allowDrop(e)) { e.dataTransfer.dropEffect = 'none'; return; }
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      };
+
+      const onDropCapture = (e) => {
+        if (!allowDrop(e)) return;
+        e.preventDefault();
+        try {
+          const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+          const empId = data?.empId;
+          if (empId == null) return;
+          if (data.fromDay) onDropPayload(d, { ...data, dropIndex: assignedAll.length });
+          else onAdd(empId);
+        } catch {}
+      };
+
       return (
         <div
-          ref={ref}
           className={("min-h-36 rounded-2xl border p-2 flex flex-col gap-2 bg-white ") +
             (isHL? ' ring-4 ring-blue-400 border-blue-400' : ' border-slate-200') +
             (isVacHL ? ' outline outline-2 outline-rose-400' : '')
           }
+          onDragOverCapture={onDragOverCapture}
+          onDropCapture={onDropCapture}
           title={isWeekend(year, month, d) ? '假日 6 小時' : '平日 7 小時'}
         >
           <div className="flex items-center justify-between text-xs text-slate-500">
@@ -1024,23 +973,6 @@
           ) : (
             <ul className="flex flex-col gap-1">
               {assignedAll.map((empId, idx) => renderChip(empId, idx))}
-              {!readOnly && (
-                <li
-                  className="h-6 rounded-lg border border-dashed border-slate-200"
-                  onDragOver={(e)=>{ if (allowDrop(e)) { e.preventDefault(); e.dataTransfer.dropEffect='move'; } }}
-                  onDrop={(e)=>{
-                    if (!allowDrop(e)) return;
-                    e.preventDefault();
-                    try{
-                      const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-                      const empId = data?.empId;
-                      if (empId == null) return;
-                      onDropPayload(d, { ...data, dropIndex: assignedAll.length });
-                    } catch {}
-                  }}
-                  title="拖到最底可放到最後"
-                />
-              )}
             </ul>
           )}
         </div>
