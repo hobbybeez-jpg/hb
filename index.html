@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Hobby Bee 排班工具（Netlify 版）</title>
+  <title>Hobby Bee 排班工具（正式版：週日為每週第一天）</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -16,9 +16,8 @@
     .calendar-inner { display: inline-block; transform-origin: top left; }
   </style>
 </head>
-
 <body class="bg-slate-50">
-  <!-- Tailwind safelist -->
+  <!-- safelist：確保 Tailwind 生成以下顏色類別供 JS 動態套用（強對比組合） -->
   <div class="hidden" aria-hidden="true">
     <span class="bg-red-200 border-red-700 text-red-900"></span>
     <span class="bg-orange-200 border-orange-700 text-orange-900"></span>
@@ -45,7 +44,7 @@
   <script type="text/babel">
     const { useEffect, useMemo, useRef, useState, useLayoutEffect } = React;
 
-    // === Utils（週日為每週第一天）===
+    // === Utils（週日為每週第一天） ===
     const ymKey = (y, m) => `${y}-${String(m + 1).padStart(2, '0')}`; // m:0-11
     const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
     const getDOW = (y, m, d) => new Date(y, m, d).getDay(); // 0..6 Sun..Sat
@@ -53,8 +52,8 @@
     const hoursForDate = (y, m, d) => (isWeekend(y, m, d) ? 6 : 7);
     const dateStr = (y,m,d) => `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
 
-    const encodeShare = (obj) => btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
-    const decodeShare = (str) => JSON.parse(decodeURIComponent(escape(atob(str))));
+    // ❗ 這版移除 #s= 分享快照（避免網址越來越長）
+    // 保留雲端儲存（固定 REMOTE_KEY）＋ 固定唯讀網址 /ro
 
     const DISTINCT_KEYS = ['red','orange','amber','emerald','teal','blue','violet'];
     const EXTENDED_KEYS = [...DISTINCT_KEYS,'rose','cyan','indigo','lime','fuchsia','pink','purple','sky','slate','stone','green'];
@@ -83,7 +82,7 @@
     function buildMonthMatrix(year, month){
       const total = daysInMonth(year, month);
       const firstDow = new Date(year, month, 1).getDay(); // 0..6 Sun..Sat
-      const leading = firstDow;
+      const leading = firstDow; // 週日置前
       const slots = leading + total;
       const weekCount = Math.ceil(slots / 7);
       const weeks = Array.from({length: weekCount}, ()=> Array(7).fill(null).map(()=>({type:'pad'})));
@@ -128,7 +127,7 @@
       );
     }
 
-    // ===== Netlify Blobs API（Functions 代理）=====
+    // ===== Netlify Blobs API（Functions 代理） =====
     const REMOTE_KEY = 'hb-default';
     const API_BASE = '/.netlify/functions/schedule';
 
@@ -150,13 +149,14 @@
       if (!res.ok && res.status !== 204) throw new Error('儲存失敗');
     }
 
-    // ===== Portal（休假彈窗）=====
+    // ===== Portal：休假彈窗置頂 =====
     function Portal({ children }){
       const [node] = useState(()=> document.createElement('div'));
       useEffect(()=>{ document.body.appendChild(node); return ()=>{ document.body.removeChild(node); }; }, [node]);
       return ReactDOM.createPortal(children, node);
     }
 
+    // ===== 放大版休假 Popover（週日置前） =====
     function VacationPopover({ emp, anchor, baseYear, baseMonth, onClose, isVacation, toggleVacation }) {
       const [off, setOff] = useState(0);
       const cur = new Date(baseYear, baseMonth + off, 1);
@@ -228,181 +228,62 @@
       );
     }
 
-    // ===== 簡潔版：名牌清單 + 職位圓圈（點擊切換），且 S/P/F/M 永遠排最上方 =====
-    const ROLE_KEYS = ['S','P','F','M'];
-
-    function normalizeDayEntry(entry){
-      const empty = { roles:{S:null,P:null,F:null,M:null}, order:[] };
-      if (!entry) return empty;
-
-      if (Array.isArray(entry)) {
-        const roles = {S:null,P:null,F:null,M:null};
-        const order = [];
-        entry.forEach((id, idx) => {
-          const rk = ROLE_KEYS[idx];
-          if (rk && !roles[rk]) roles[rk] = id;
-          order.push(id);
-        });
-        const roleTop = ROLE_KEYS.map(rk => roles[rk]).filter(Boolean);
-        const rest = order.filter(id => !roleTop.includes(id));
-        return { roles, order: Array.from(new Set([...roleTop, ...rest])) };
-      }
-
-      if (entry && entry.roles && Array.isArray(entry.others)) {
-        const roles = {
-          S: entry.roles.S ?? null,
-          P: entry.roles.P ?? null,
-          F: entry.roles.F ?? null,
-          M: entry.roles.M ?? null,
-        };
-        const roleTop = ROLE_KEYS.map(rk => roles[rk]).filter(Boolean);
-        const rest = entry.others.filter(id => !roleTop.includes(id));
-        return { roles, order: Array.from(new Set([...roleTop, ...rest])) };
-      }
-
-      const roles = entry.roles || {};
-      const out = {
-        roles: {
-          S: roles.S ?? null,
-          P: roles.P ?? null,
-          F: roles.F ?? null,
-          M: roles.M ?? null,
-        },
-        order: Array.isArray(entry.order) ? entry.order.slice() : []
-      };
-
-      const roleTop = ROLE_KEYS.map(rk => out.roles[rk]).filter(Boolean);
-      const rest = (out.order || []).filter(id => !roleTop.includes(id));
-      out.order = Array.from(new Set([...roleTop, ...rest]));
-      return out;
-    }
-
-    function findRoleOfEmp(dayEntry, empId){
-      const d = normalizeDayEntry(dayEntry);
-      for (const rk of ROLE_KEYS) if (d.roles[rk] === empId) return rk;
-      return null;
-    }
-
-    function removeEmpFromDayEntry(dayEntry, empId){
-      const d = normalizeDayEntry(dayEntry);
-      for (const rk of ROLE_KEYS) if (d.roles[rk] === empId) d.roles[rk] = null;
-      d.order = (d.order || []).filter(id => id !== empId);
-      return d;
-    }
-
-    function ensureEmpInOrder(dayEntry, empId){
-      const d = normalizeDayEntry(dayEntry);
-      if (!d.order.includes(empId)) d.order = [...d.order, empId];
-      return normalizeDayEntry(d);
-    }
-
-    function addEmpAuto(dayEntry, empId){
-      let d = normalizeDayEntry(dayEntry);
-      if (d.order.includes(empId) || findRoleOfEmp(d, empId)) return d;
-
-      for (const rk of ROLE_KEYS) {
-        if (!d.roles[rk]) {
-          d.roles[rk] = empId;
-          d = ensureEmpInOrder(d, empId);
-          return d;
-        }
-      }
-      d = ensureEmpInOrder(d, empId);
-      return d;
-    }
-
-    function setEmpRole(dayEntry, empId, nextRole){
-      let d = normalizeDayEntry(dayEntry);
-      d = ensureEmpInOrder(d, empId);
-
-      for (const rk of ROLE_KEYS) if (d.roles[rk] === empId) d.roles[rk] = null;
-
-      if (!nextRole) return normalizeDayEntry(d);
-
-      const existing = d.roles[nextRole];
-      if (existing && existing !== empId) d.roles[nextRole] = null;
-
-      d.roles[nextRole] = empId;
-      return normalizeDayEntry(d);
-    }
-
-    function cycleRole(currentRole){
-      if (!currentRole) return 'S';
-      const idx = ROLE_KEYS.indexOf(currentRole);
-      if (idx < 0) return 'S';
-      return (idx === ROLE_KEYS.length - 1) ? null : ROLE_KEYS[idx + 1];
-    }
-
-    function reorderInDay(dayEntry, fromIndex, toIndex){
-      const d = normalizeDayEntry(dayEntry);
-      const arr = d.order.slice();
-      const from = Math.max(0, Math.min(fromIndex, arr.length - 1));
-      const to = Math.max(0, Math.min(toIndex, arr.length));
-      const [item] = arr.splice(from, 1);
-      arr.splice(to, 0, item);
-      d.order = arr;
-      return normalizeDayEntry(d);
-    }
-
     function App() {
-      const [year, setYear] = useState(2025);
-      const [month, setMonth] = useState(8);
+      // ✅ 預設自動顯示當月
+      const now = new Date();
+      const [year, setYear] = useState(now.getFullYear());
+      const [month, setMonth] = useState(now.getMonth());
 
       const [nameInput, setNameInput] = useState("");
       const [employees, setEmployees] = useState([]);
-      const [assignments, setAssignments] = useState({});
-      const [assignmentsByYM, setAssignmentsByYM] = useState({});
+      const [assignments, setAssignments] = useState({}); // 當月
+      const [assignmentsByYM, setAssignmentsByYM] = useState({}); // 全部月份
       const [colorMap, setColorMap] = useState({});
-      const [vacations, setVacations] = useState({});
+      const [vacations, setVacations] = useState({}); // { [empId]: { 'YYYY-MM-DD': true } }
 
       const [highlightEmpId, setHighlightEmpId] = useState(null);
+
+      // ✅ 唯讀用固定網址控制：/ro 會被 redirect 到 /?readOnly=1
       const [readOnly, setReadOnly] = useState(false);
       const [saved, setSaved] = useState(false);
-      const [vacEditEmp, setVacEditEmp] = useState(null);
 
+      const [vacEditEmp, setVacEditEmp] = useState(null); // {emp, anchor:{x,y}}
+
+      // 解析唯讀參數
       useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         setReadOnly(params.get('readOnly') === '1');
-        const hash = window.location.hash || '';
-        if (hash.startsWith('#s=')) {
-          try {
-            const payload = decodeShare(hash.slice(3));
-            if (payload && (payload.v === 1 || payload.v === 2)) {
-              setYear(payload.year); setMonth(payload.month);
-              setEmployees(payload.employees || []);
-              if (payload.assignmentsByYM) {
-                setAssignmentsByYM(payload.assignmentsByYM);
-                setAssignments(payload.assignmentsByYM[ymKey(payload.year, payload.month)] || {});
-              } else {
-                setAssignments(payload.assignments || {});
-              }
-              setColorMap(payload.colorMap || {});
-              setVacations(payload.vacations || {});
-              setReadOnly(true);
-            }
-          } catch (e) { console.warn('共享連結解析失敗', e); }
-        }
       }, []);
 
+      // 啟動時載入雲端資料，並且如果有資料就優先顯示「當月」
       useEffect(() => {
         (async () => {
           const remote = await loadRemoteAll();
           if (remote) {
-            setEmployees(remote.employees || []);
-            setColorMap(remote.colorMap || {});
-            setVacations(remote.vacations || {});
+            const emps = remote.employees || [];
+            const cmap = remote.colorMap || {};
+            const vac = remote.vacations || {};
             const byYM = remote.assignmentsByYM || {};
+
+            setEmployees(emps);
+            setColorMap(cmap);
+            setVacations(vac);
             setAssignmentsByYM(byYM);
-            setAssignments(byYM[ymKey(year, month)] || {});
+
+            // 顯示當月（如果當月沒有，顯示空白即可）
+            const ym = ymKey(now.getFullYear(), now.getMonth());
+            setAssignments(byYM[ym] || {});
           }
         })();
       }, []);
 
+      // 員工顏色保持穩定
       useEffect(() => {
         const next = computeColorMap(employees, colorMap);
         if (JSON.stringify(next) !== JSON.stringify(colorMap)) setColorMap(next);
       }, [employees]);
 
+      // 切換月份時載入當月資料（來自 assignmentsByYM）
       useEffect(() => {
         setAssignments(assignmentsByYM[ymKey(year, month)] || {});
       }, [year, month, assignmentsByYM]);
@@ -431,7 +312,10 @@
       const monthLabel = (y, m) => `${y} 年 ${String(m+1).padStart(2,'0')} 月`;
       const abbr = (name) => (name || '').trim().slice(0,3).toUpperCase();
 
-      const getEmpColor = (empId) => colorClassForKey(colorMap[empId] || 'emerald');
+      const getEmpColor = (empId) => {
+        const key = colorMap[empId];
+        return colorClassForKey(key || 'emerald');
+      };
 
       const addEmployee = () => {
         if (readOnly) return;
@@ -451,10 +335,8 @@
         setAssignments(prev => {
           const next = { ...prev };
           Object.keys(next).forEach(day => {
-            const cleaned = removeEmpFromDayEntry(next[day], empId);
-            const empty = cleaned.order.length === 0 && ROLE_KEYS.every(rk => !cleaned.roles[rk]);
-            if (empty) delete next[day];
-            else next[day] = cleaned;
+            const list = (next[day]||[]).filter(id => id !== empId);
+            if (list.length) next[day]=list; else delete next[day];
           });
           return next;
         });
@@ -463,119 +345,33 @@
         if (highlightEmpId===empId) setHighlightEmpId(null);
       };
 
-      const seedDemo = () => {
-        const base = Date.now();
-        const emps = [
-          { id: base+1, name: 'Alice' },
-          { id: base+2, name: 'Ben' },
-          { id: base+3, name: 'Cindy' },
-          { id: base+4, name: 'David' },
-          { id: base+5, name: 'Emma' },
-          { id: base+6, name: 'Frank' },
-          { id: base+7, name: 'Gina' },
-        ];
-
-        let d2 = null; d2 = addEmpAuto(d2, emps[0].id); d2 = addEmpAuto(d2, emps[1].id);
-        let d5 = null; d5 = addEmpAuto(d5, emps[2].id);
-        let d9 = null; d9 = addEmpAuto(d9, emps[3].id); d9 = addEmpAuto(d9, emps[0].id); d9 = addEmpAuto(d9, emps[1].id); d9 = addEmpAuto(d9, emps[2].id); d9 = addEmpAuto(d9, emps[4].id);
-
-        setEmployees(emps);
-        setAssignments({ '2': d2, '5': d5, '9': d9 });
-        setColorMap(computeColorMap(emps, {}));
-        setVacations({
-          [emps[0].id]: { [dateStr(2025,8,7)]: true, [dateStr(2025,8,14)]: true },
-          [emps[2].id]: { [dateStr(2025,8,5)]: true },
-        });
-      };
-
-      // Drag sources
-      const onDragStartFromBadge = (e, empId) => {
-        e.dataTransfer.setData('text/plain', JSON.stringify({ empId }));
-        e.dataTransfer.effectAllowed = 'copy';
-      };
-      const onDragStartFromCell = (e, empId, day, index) => {
-        e.dataTransfer.setData('text/plain', JSON.stringify({ empId, fromDay: day, fromIndex: index }));
-        e.dataTransfer.effectAllowed = 'move';
-      };
-
-      // Mutations
-      const addToDay = (day, empId) => {
-        setAssignments(prev => {
-          const next = { ...prev };
-          next[String(day)] = addEmpAuto(next[String(day)], empId);
-          return next;
-        });
-      };
-
-      const removeFromDay = (day, empId) => {
-        setAssignments(prev => {
-          const next = { ...prev };
-          const key = String(day);
-          const cleaned = removeEmpFromDayEntry(next[key], empId);
-          const empty = cleaned.order.length === 0 && ROLE_KEYS.every(rk => !cleaned.roles[rk]);
-          if (empty) delete next[key];
-          else next[key] = cleaned;
-          return next;
-        });
-      };
-
+      // 拖放
+      const onDragStartFromBadge = (e, empId) => { e.dataTransfer.setData('text/plain', JSON.stringify({ empId })); e.dataTransfer.effectAllowed = 'copy'; };
+      const onDragStartFromCell = (e, empId, day) => { e.dataTransfer.setData('text/plain', JSON.stringify({ empId, fromDay: day })); e.dataTransfer.effectAllowed = 'move'; };
+      const addToDay = (day, empId) => { setAssignments(prev => { const cur = prev[String(day)] || []; if (cur.includes(empId)) return prev; return { ...prev, [String(day)]: [...cur, empId] }; }); };
       const moveOrCopyToDay = (day, payload) => {
-        const { empId, fromDay, fromIndex, dropIndex } = payload || {};
-        if (empId == null) return;
-
+        const { empId, fromDay } = payload; if (fromDay && Number(fromDay) === Number(day)) return;
         setAssignments(prev => {
           const next = { ...prev };
-
-          // If moving within same day -> reorder directly (fast path)
-          if (fromDay && Number(fromDay) === Number(day) && typeof fromIndex === 'number' && typeof dropIndex === 'number') {
-            const key = String(day);
-            next[key] = reorderInDay(next[key], fromIndex, dropIndex);
-            return next;
-          }
-
-          // Remove from source day if moving from another day
           if (fromDay) {
-            const srcKey = String(fromDay);
-            const cleaned = removeEmpFromDayEntry(next[srcKey], empId);
-            const empty = cleaned.order.length === 0 && ROLE_KEYS.every(rk => !cleaned.roles[rk]);
-            if (empty) delete next[srcKey];
-            else next[srcKey] = cleaned;
+            const list = (next[String(fromDay)] || []).filter(id => id !== empId);
+            if (list.length) next[String(fromDay)] = list; else delete next[String(fromDay)];
           }
-
-          const dstKey = String(day);
-          let dst = addEmpAuto(next[dstKey], empId);
-
-          if (typeof dropIndex === 'number') {
-            const idx = dst.order.indexOf(empId);
-            if (idx >= 0) dst = reorderInDay(dst, idx, dropIndex);
-          }
-
-          next[dstKey] = dst;
+          const cur = next[String(day)] || [];
+          if (!cur.includes(empId)) next[String(day)] = [...cur, empId];
           return next;
         });
       };
-
-      const setRoleForDay = (day, empId, roleOrNull) => {
-        setAssignments(prev => {
-          const next = { ...prev };
-          next[String(day)] = setEmpRole(next[String(day)], empId, roleOrNull);
-          return next;
-        });
-      };
+      const removeFromDay = (day, empId) => { setAssignments(prev => { const list = (prev[String(day)] || []).filter(id => id !== empId); const next = { ...prev }; if (list.length) next[String(day)] = list; else delete next[String(day)]; return next; }); };
 
       const totals = useMemo(() => {
-        const t = Object.create(null);
-        employees.forEach(e => t[e.id] = 0);
-        Object.entries(assignments).forEach(([day, entry]) => {
-          const d = Number(day);
-          const h = hoursForDate(year, month, d);
-          const norm = normalizeDayEntry(entry);
-          norm.order.forEach(id => { if (t[id] != null) t[id] += h; });
-        });
-        return t;
+        const t = Object.create(null); employees.forEach(e => t[e.id] = 0);
+        Object.entries(assignments).forEach(([day, empIds]) => {
+          const d = Number(day); const h = hoursForDate(year, month, d);
+          empIds.forEach(id => { if (t[id] != null) t[id] += h; });
+        }); return t;
       }, [assignments, employees, year, month]);
 
-      // Trash drop
       const trashRef = useRef(null);
       useEffect(() => {
         const el = trashRef.current; if (!el) return;
@@ -584,36 +380,18 @@
           e.preventDefault();
           try {
             const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-            if (data && data.fromDay && data.empId != null) removeFromDay(data.fromDay, data.empId);
-          } catch {}
+            if (data && data.fromDay && data.empId != null) { removeFromDay(data.fromDay, data.empId); }
+          } catch(_) {}
         };
-        el.addEventListener('dragover', onDragOver);
-        el.addEventListener('drop', onDrop);
+        el.addEventListener('dragover', onDragOver); el.addEventListener('drop', onDrop);
         return () => { el.removeEventListener('dragover', onDragOver); el.removeEventListener('drop', onDrop); };
       }, []);
-
-      // Share
-      const makeShareUrl = (isReadOnly) => {
-        const payload = {
-          v: 2, year, month, employees, colorMap, vacations,
-          assignmentsByYM: { ...assignmentsByYM, [ymKey(year, month)]: assignments }
-        };
-        const u = new URL(window.location.href);
-        u.hash = 's=' + encodeShare(payload);
-        if (isReadOnly) u.searchParams.set('readOnly', '1'); else u.searchParams.delete('readOnly');
-        return u.toString();
-      };
-      const copyShare = async (isReadOnly) => {
-        const url = makeShareUrl(isReadOnly);
-        await navigator.clipboard.writeText(url);
-        setSaved(true); setTimeout(()=>setSaved(false), 1500);
-      };
 
       return (
         <div className="h-full flex flex-col">
           <header className="border-b bg-white">
             <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3">
-              <h1 className="text-lg font-semibold text-slate-800">排班工具（Netlify 版）</h1>
+              <h1 className="text-lg font-semibold text-slate-800">排班工具（週日為第一天）</h1>
               <span className="text-xs text-slate-500">週一到週五 7 小時，週末 6 小時</span>
               {readOnly && (<span className="ml-auto text-xs px-2 py-1 rounded bg-amber-100 text-amber-700">唯讀檢視</span>)}
             </div>
@@ -622,40 +400,29 @@
           <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-4 grid grid-cols-12 gap-4">
             <aside className="col-span-12 lg:col-span-4 xl:col-span-3 flex flex-col gap-4">
               <section className="bg-white border rounded-2xl p-4 shadow-sm">
-                <div className="flex items-center justify-between">
-                  <div className="font-medium text-slate-700">員工名單</div>
-                </div>
+                <div className="flex items-center justify-between"><div className="font-medium text-slate-700">員工名單</div></div>
 
                 {!readOnly && (
                   <div className="mt-3 flex gap-2">
-                    <input
-                      value={nameInput}
-                      onChange={(e)=>setNameInput(e.target.value)}
-                      placeholder="輸入員工名字"
-                      className="flex-1 border rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
+                    <input value={nameInput} onChange={(e)=>setNameInput(e.target.value)} placeholder="輸入員工名字" className="flex-1 border rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
                     <button onClick={addEmployee} className="px-3 py-2 text-sm rounded-xl bg-blue-600 text-white hover:bg-blue-700">加入</button>
                   </div>
                 )}
 
                 <div className="mt-3 max-h-56 overflow-auto pr-1 scrollbar-thin">
                   {employees.length === 0 && (
-                    <div className="flex items-center justify-between text-sm text-slate-500">
-                      <span>尚無員工，請新增或建立示範資料。</span>
-                      {!readOnly && <button onClick={seedDemo} className="text-blue-600 hover:underline">建立示範資料</button>}
+                    <div className="text-sm text-slate-500">
+                      尚無員工資料（請先在可編輯模式新增員工並儲存）
                     </div>
                   )}
-
                   <ul className="flex flex-wrap gap-2">
                     {employees.map(emp => {
                       const color = getEmpColor(emp.id);
                       const hl = highlightEmpId===emp.id ? 'ring-2 ring-blue-300' : '';
                       return (
-                        <li
-                          key={emp.id}
-                          className={`shrink-0 flex items-center gap-2 px-2 py-1 rounded-2xl border text-sm ${color} ${hl}`}
-                          draggable={!readOnly}
-                          onDragStart={(e)=>onDragStartFromBadge(e, emp.id)}
+                        <li key={emp.id} className={`shrink-0 flex items-center gap-2 px-2 py-1 rounded-2xl border text-sm ${color} ${hl}`}
+                            draggable={!readOnly}
+                            onDragStart={(e)=>onDragStartFromBadge(e, emp.id)}
                         >
                           <button
                             className="text-slate-800 hover:underline flex items-center gap-1 whitespace-nowrap"
@@ -675,11 +442,7 @@
                           )}
 
                           {!readOnly && (
-                            <button
-                              className="ml-auto text-xs text-slate-500 hover:text-red-500"
-                              onClick={()=>removeEmployee(emp.id)}
-                              title="刪除員工"
-                            >✕</button>
+                            <button className="ml-auto text-xs text-slate-500 hover:text-red-500" onClick={()=>removeEmployee(emp.id)} title="刪除員工">✕</button>
                           )}
                         </li>
                       );
@@ -735,27 +498,19 @@
                 </section>
               )}
 
-              <section className="bg-white border rounded-2xl p-4 shadow-sm">
-                <div className="font-medium text-slate-700">雲端儲存與分享</div>
-                <div className="mt-3 flex flex-col gap-2">
-                  {!readOnly && (
-                    <button onClick={saveRemote} className="px-3 py-2 rounded-2xl text-sm bg-emerald-600 text-white hover:bg-emerald-700">
-                      儲存到雲端（Netlify）
-                    </button>
-                  )}
-                  <div className="flex gap-2">
-                    <button onClick={()=>copyShare(true)} className="flex-1 px-3 py-2 rounded-2xl text-sm border bg-white hover:bg-slate-50">
-                      複製唯讀分享連結
-                    </button>
-                    {!readOnly && (
-                      <button onClick={()=>copyShare(false)} className="flex-1 px-3 py-2 rounded-2xl text-sm border bg-white hover:bg-slate-50" title="允許他人共同編輯">
-                        複製可編輯連結
-                      </button>
-                    )}
+              {/* ✅ 唯讀模式不顯示分享／避免混淆 */}
+              {!readOnly && (
+                <section className="bg-white border rounded-2xl p-4 shadow-sm">
+                  <div className="font-medium text-slate-700">雲端儲存</div>
+                  <div className="mt-3 flex flex-col gap-2">
+                    <button onClick={saveRemote} className="px-3 py-2 rounded-2xl text-sm bg-emerald-600 text-white hover:bg-emerald-700">儲存到雲端</button>
+                    {saved && <div className="text-xs text-emerald-700">已完成</div>}
+                    <div className="text-xs text-slate-500">
+                      固定唯讀網址：/ro （請用 Netlify redirect 設定）
+                    </div>
                   </div>
-                  {saved && <div className="text-xs text-emerald-700">已完成</div>}
-                </div>
-              </section>
+                </section>
+              )}
 
               {vacEditEmp && !readOnly && (
                 <VacationPopover
@@ -773,34 +528,13 @@
             <section className="col-span-12 lg:col-span-8 xl:col-span-9 flex flex-col gap-4">
               <div className="bg-white border rounded-2xl p-3 shadow-sm flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={()=>{
-                      let y=year, m=month-1; if(m<0){m=11;y--;}
-                      setYear(y); setMonth(m); setHighlightEmpId(null);
-                    }}
-                    className="px-2 py-1 rounded-lg border bg-white hover:bg-slate-50"
-                    title="上一個月"
-                  >◀</button>
-
+                  <button onClick={()=>{ let y=year, m=month-1; if(m<0){m=11;y--; } setYear(y); setMonth(m); setHighlightEmpId(null); }} className="px-2 py-1 rounded-lg border bg-white hover:bg-slate-50" title="上一個月">◀</button>
                   <div className="font-medium text-slate-800">{monthLabel(year, month)}</div>
-
-                  <button
-                    onClick={()=>{
-                      let y=year, m=month+1; if(m>11){m=0;y++;}
-                      setYear(y); setMonth(m); setHighlightEmpId(null);
-                    }}
-                    className="px-2 py-1 rounded-lg border bg-white hover:bg-slate-50"
-                    title="下一個月"
-                  >▶</button>
+                  <button onClick={()=>{ let y=year, m=month+1; if(m>11){m=0;y++; } setYear(y); setMonth(m); setHighlightEmpId(null); }} className="px-2 py-1 rounded-lg border bg-white hover:bg-slate-50" title="下一個月">▶</button>
                 </div>
 
                 {!readOnly && (
-                  <button
-                    onClick={()=>{ if (confirm('清除本月所有排班？')) setAssignments({}); }}
-                    className="px-3 py-2 rounded-2xl text-sm border bg-white hover:bg-slate-50"
-                  >
-                    清空本月排班
-                  </button>
+                  <button onClick={()=>{ if (confirm('清除本月所有排班？')) setAssignments({}); }} className="px-3 py-2 rounded-2xl text-sm border bg-white hover:bg-slate-50">清空本月排班</button>
                 )}
               </div>
 
@@ -810,7 +544,6 @@
                     <div className="grid grid-cols-7 gap-2 text-center text-slate-500 text-sm mb-2">
                       {['週日','週一','週二','週三','週四','週五','週六'].map((w) => (<div key={w} className="font-medium">{w}</div>))}
                     </div>
-
                     <div className="grid grid-cols-7 gap-2 auto-rows-fr">
                       {weeks.flat().map((c, idx) => c.type === 'pad' ? (
                         <div key={idx} className="min-h-36 rounded-2xl bg-slate-50 border border-dashed"></div>
@@ -822,13 +555,12 @@
                           month={month}
                           readOnly={readOnly}
                           empList={employees}
-                          dayEntry={assignments[String(c.d)]}
+                          assigned={(assignments[String(c.d)] || [])}
                           highlightEmpId={highlightEmpId}
                           getEmpColor={getEmpColor}
                           onDropPayload={moveOrCopyToDay}
                           onAdd={(empId)=>addToDay(c.d, empId)}
                           onRemove={(empId)=>removeFromDay(c.d, empId)}
-                          onSetRole={(empId, roleOrNull)=>setRoleForDay(c.d, empId, roleOrNull)}
                           onDragStartFromCell={onDragStartFromCell}
                           isVacation={isVacation}
                         />
@@ -843,138 +575,77 @@
       );
     }
 
-    function CalendarCell({
-      d, year, month, empList, dayEntry,
-      readOnly, highlightEmpId, getEmpColor,
-      onDropPayload, onAdd, onRemove, onSetRole,
-      onDragStartFromCell,
-      isVacation
-    }) {
+    function CalendarCell({ d, year, month, empList, assigned, readOnly, highlightEmpId, getEmpColor, onDropPayload, onAdd, onRemove, onDragStartFromCell, isVacation }) {
+      const ref = useRef(null);
       const h = hoursForDate(year, month, d);
-      const norm = useMemo(() => normalizeDayEntry(dayEntry), [dayEntry]);
-
-      const assignedAll = norm.order || [];
-      const isHL = highlightEmpId != null && assignedAll.includes(highlightEmpId);
+      const isHL = highlightEmpId != null && assigned.includes(highlightEmpId);
       const isVacHL = highlightEmpId != null && isVacation(highlightEmpId, year, month, d);
 
-      const allowDrop = (e) => {
-        if (readOnly) return false;
-        try {
-          const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-          const empId = data?.empId;
-          if (empId != null && isVacation(empId, year, month, d)) return false;
-        } catch {}
-        return true;
-      };
-
-      const roleBadge = (role) => {
-        if (!role) return { txt: '', cls: 'bg-slate-200 text-slate-700' };
-        const map = {
-          S: { txt:'S', cls:'bg-rose-500 text-white' },
-          P: { txt:'P', cls:'bg-amber-500 text-white' },
-          F: { txt:'F', cls:'bg-emerald-600 text-white' },
-          M: { txt:'M', cls:'bg-indigo-600 text-white' },
+      useEffect(() => {
+        const el = ref.current; if (!el) return;
+        const onDragOver = (e) => {
+          if (readOnly) return; e.preventDefault();
+          try {
+            const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+            const empId = data?.empId;
+            if (empId != null && isVacation(empId, year, month, d)) { e.dataTransfer.dropEffect = 'none'; return; }
+          } catch {}
+          e.dataTransfer.dropEffect = 'copy';
         };
-        return map[role] || { txt: role, cls:'bg-slate-500 text-white' };
-      };
-
-      const renderChip = (empId, index) => {
-        const emp = empList.find(e => e.id === empId);
-        if (!emp) return null;
-
-        const role = findRoleOfEmp(norm, empId);
-        const rb = roleBadge(role);
-
-        const isThisHL = highlightEmpId === empId;
-        const ring = isThisHL ? 'ring-2 ring-blue-300' : '';
-        const color = getEmpColor(empId);
-        const vacToday = isVacation(empId, year, month, d);
-
-        const onCycle = () => {
-          if (readOnly) return;
-          const next = cycleRole(role);
-          onSetRole(empId, next);
+        const onDrop = (e) => {
+          if (readOnly) return; e.preventDefault();
+          try {
+            const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+            const empId = data?.empId;
+            if (empId != null && isVacation(empId, year, month, d)) { return; }
+            if (data && typeof empId !== 'undefined') { if (data.fromDay) onDropPayload(d, data); else onAdd(empId); }
+          } catch {}
         };
-
-        return (
-          <li
-            key={empId}
-            className={"flex items-center gap-2 px-2 py-1 rounded-xl border " + color + " " + ring + (vacToday ? ' border-rose-500' : '')}
-            draggable={!readOnly}
-            onDragStart={(e)=>onDragStartFromCell(e, empId, d, index)}
-            title={emp.name}
-          >
-            <button
-              type="button"
-              onClick={onCycle}
-              className={"w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 " + rb.cls + (readOnly ? ' cursor-default' : ' hover:opacity-90')}
-              title={readOnly ? '' : '點擊切換職位'}
-            >
-              {rb.txt}
-            </button>
-
-            <div className="min-w-0 flex-1">
-              <div className="text-[12px] font-medium text-slate-900 truncate">{emp.name}</div>
-            </div>
-
-            {!readOnly && (
-              <button
-                className="text-slate-500 hover:text-red-500 text-sm"
-                onClick={()=>onRemove(empId)}
-                title="移除"
-              >
-                ✕
-              </button>
-            )}
-          </li>
-        );
-      };
-
-      // Capture: whole cell is always droppable even when cursor overlaps chips
-      const onDragOverCapture = (e) => {
-        if (!allowDrop(e)) { e.dataTransfer.dropEffect = 'none'; return; }
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'copy';
-      };
-
-      const onDropCapture = (e) => {
-        if (!allowDrop(e)) return;
-        e.preventDefault();
-        try {
-          const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-          const empId = data?.empId;
-          if (empId == null) return;
-          if (data.fromDay) onDropPayload(d, { ...data, dropIndex: assignedAll.length });
-          else onAdd(empId);
-        } catch {}
-      };
+        el.addEventListener('dragover', onDragOver); el.addEventListener('drop', onDrop);
+        return () => { el.removeEventListener('dragover', onDragOver); el.removeEventListener('drop', onDrop); };
+      }, [d, onAdd, onDropPayload, readOnly, year, month, isVacation]);
 
       return (
-        <div
-          className={("min-h-36 rounded-2xl border p-2 flex flex-col gap-2 bg-white ") +
-            (isHL? ' ring-4 ring-blue-400 border-blue-400' : ' border-slate-200') +
-            (isVacHL ? ' outline outline-2 outline-rose-400' : '')
-          }
-          onDragOverCapture={onDragOverCapture}
-          onDropCapture={onDropCapture}
-          title={isWeekend(year, month, d) ? '假日 6 小時' : '平日 7 小時'}
-        >
+        <div ref={ref} className={("min-h-36 rounded-2xl border p-2 flex flex-col gap-1 bg-white ") +
+             (isHL? ' ring-4 ring-blue-400 border-blue-400' : ' border-slate-200') + (isVacHL ? ' outline outline-2 outline-rose-400' : '')}
+             title={isWeekend(year, month, d) ? '假日 6 小時' : '平日 7 小時'}>
           <div className="flex items-center justify-between text-xs text-slate-500">
             <span className="font-medium text-slate-700">{d}</span>
-            {!readOnly && (<span className="px-1 py-0.5 rounded bg-slate-100">{h} 小時</span>)}
+            {!readOnly && ( <span className="px-1 py-0.5 rounded bg-slate-100">{h} 小時</span> )}
           </div>
 
-          {assignedAll.length === 0 ? (
-            !readOnly ? (
-              <div className="text-xs text-slate-300 select-none flex-1">可拖曳名牌到此</div>
+          <div className="flex-1 pr-1">
+            {assigned.length === 0 ? (
+              ( <div className="h-4"></div> )  /* 唯讀不顯示提示 */
             ) : (
-              <div className="h-4"></div>
-            )
-          ) : (
-            <ul className="flex flex-col gap-1">
-              {assignedAll.map((empId, idx) => renderChip(empId, idx))}
-            </ul>
-          )}
+              <ul className="flex flex-col gap-1">
+                {assigned.map((empId) => {
+                  const emp = empList.find(e => e.id === empId); if (!emp) return null;
+                  const isThisHL = highlightEmpId === empId;
+                  const color = getEmpColor(empId);
+                  const ring = isThisHL ? 'ring-2 ring-blue-300' : '';
+                  const vacToday = isVacation(empId, year, month, d);
+                  return (
+                    <li key={empId}
+                        className={("group flex items-center gap-1 text-[11px] leading-tight px-2 py-0.5 rounded-md border " + color + ' ' + ring + (vacToday ? ' border-rose-500' : ''))}
+                        draggable={!readOnly}
+                        onDragStart={(e)=>onDragStartFromCell(e, empId, d)}
+                        title={emp.name}
+                    >
+                      <span className="flex items-center gap-1 whitespace-nowrap">
+                        <span className="font-semibold sm:hidden">{(emp.name || '').slice(0,3).toUpperCase()}</span>
+                        <span className="hidden sm:inline truncate">{emp.name}</span>
+                      </span>
+                      {vacToday && <span className="ml-1 text-[10px] text-rose-700" title="該員工今日休假">休</span>}
+                      {!readOnly && (
+                        <button className="ml-auto opacity-0 group-hover:opacity-100 transition text-slate-500 hover:text-red-500" onClick={()=>onRemove(empId)} title="移除">✕</button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
         </div>
       );
     }
