@@ -1,7 +1,3 @@
-// netlify/functions/schedule.js
-// Fix: avoid returning 204 because some environments reject it.
-// Use Web-standard handler with Response, always return 200 with body.
-
 import { getStore } from "@netlify/blobs";
 
 export default async (request) => {
@@ -24,7 +20,7 @@ export default async (request) => {
     if (request.method === "PUT") {
       const body = await request.json();
       await store.set(key, body);
-      // ✅ return 200 with JSON body (NOT 204)
+      // 不要回 204，改回 200
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
