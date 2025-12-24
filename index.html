@@ -908,7 +908,7 @@
     }
 
     function PositionRow({ pos, label, emps, empList, d, year, month, readOnly, highlightEmpId, getEmpColor, onDrop, onDragStartFromCell, onRemove, isVacation, isBlank }) {
-      const minH = isBlank ? 'min-h-[20px]' : 'h-[22px]';
+      const minH = isBlank ? 'min-h-[24px]' : 'h-[26px]';
       const bgColor = isBlank ? 'bg-slate-50' : 'bg-slate-100';
 
       const handleDragOver = (e) => {
@@ -966,12 +966,12 @@
                 return (
                   <span
                     key={empId}
-                    className={`group inline-flex items-center gap-0.5 text-[10px] leading-tight px-1 py-0 rounded border ${color} ${ring} ${vacToday ? ' border-rose-500' : ''} cursor-grab`}
+                    className={`group inline-flex items-center justify-center gap-0.5 text-xs font-medium leading-tight px-2 py-0.5 rounded border ${color} ${ring} ${vacToday ? ' border-rose-500' : ''} cursor-grab flex-1`}
                     draggable={!readOnly}
                     onDragStart={(e) => onDragStartFromCell(e, empId, d, pos)}
                     title={emp.name}
                   >
-                    <span className="truncate max-w-[50px]">{emp.name}</span>
+                    <span className="truncate">{emp.name}</span>
                     {vacToday && <span className="text-[8px] text-rose-700">休</span>}
                     {!readOnly && (
                       <button
