@@ -783,21 +783,19 @@
                 </section>
               )}
 
-              <section className="bg-white border rounded-2xl p-4 shadow-sm">
-                <div className="font-medium text-slate-700">雲端儲存與分享</div>
-                <div className="mt-3 flex flex-col gap-2">
-                  {!readOnly && (
+              {!readOnly && (
+                <section className="bg-white border rounded-2xl p-4 shadow-sm">
+                  <div className="font-medium text-slate-700">雲端儲存與分享</div>
+                  <div className="mt-3 flex flex-col gap-2">
                     <button onClick={saveRemote} className="px-3 py-2 rounded-2xl text-sm bg-emerald-600 text-white hover:bg-emerald-700">儲存到雲端（Netlify）</button>
-                  )}
-                  <div className="flex gap-2">
-                    <button onClick={() => copyShare(true)} className="flex-1 px-3 py-2 rounded-2xl text-sm border bg-white hover:bg-slate-50">複製唯讀分享連結</button>
-                    {!readOnly && (
+                    <div className="flex gap-2">
+                      <button onClick={() => copyShare(true)} className="flex-1 px-3 py-2 rounded-2xl text-sm border bg-white hover:bg-slate-50">複製唯讀分享連結</button>
                       <button onClick={() => copyShare(false)} className="flex-1 px-3 py-2 rounded-2xl text-sm border bg-white hover:bg-slate-50" title="允許他人共同編輯">複製可編輯連結</button>
-                    )}
+                    </div>
+                    {saved && <div className="text-xs text-emerald-700">已完成</div>}
                   </div>
-                  {saved && <div className="text-xs text-emerald-700">已完成</div>}
-                </div>
-              </section>
+                </section>
+              )}
 
               {vacEditEmp && !readOnly && (
                 <VacationPopover
