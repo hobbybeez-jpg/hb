@@ -175,15 +175,25 @@
     }
 
     // ===== Netlify Blobs API（Functions 代理） =====
+    // 固定 key（固定網址分享用）
     const REMOTE_KEY = 'hb-default';
     const API_BASE = '/.netlify/functions/schedule';
 
-    async function loadRemoteAll() {
-      try { const res = await fetch(`${API_BASE}?key=${encodeURIComponent(REMOTE_KEY)}`); if (!res.ok) return null; return await res.json(); }
-      catch { return null; }
+    async function loadRemoteAll(key = REMOTE_KEY) {
+      try {
+        const res = await fetch(`${API_BASE}?key=${encodeURIComponent(key)}`);
+        if (!res.ok) return null;
+        return await res.json();
+      } catch {
+        return null;
+      }
     }
-    async function saveRemoteAll(payload) {
-      const res = await fetch(`${API_BASE}?key=${encodeURIComponent(REMOTE_KEY)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    async function saveRemoteAll(payload, key = REMOTE_KEY) {
+      const res = await fetch(`${API_BASE}?key=${encodeURIComponent(key)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
       if (!res.ok && res.status !== 204) throw new Error('儲存失敗');
     }
 
@@ -272,6 +282,9 @@
       const [year, setYear] = useState(today.getFullYear());
       const [month, setMonth] = useState(today.getMonth()); // 0-11
 
+      // 固定 key：支援 ?key=xxx（固定網址分享用）
+      const [remoteKey, setRemoteKey] = useState(REMOTE_KEY);
+
       const [nameInput, setNameInput] = useState("");
       const [employees, setEmployees] = useState([]);
       const [assignments, setAssignments] = useState({}); // 當月
@@ -285,12 +298,16 @@
 
       const [vacEditEmp, setVacEditEmp] = useState(null); // {emp, anchor:{x,y}}
 
-      // 解析唯讀/分享（支援短碼或舊版 hash 格式）
+      // 解析唯讀/分享（支援短碼或舊版 hash 格式 + 固定 key）
       useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         setReadOnly(params.get('readOnly') === '1');
 
-        // 優先檢查短碼
+        // 固定 key（優先設定）
+        const key = params.get('key');
+        if (key) setRemoteKey(key);
+
+        // 優先檢查短碼（保留原功能）
         const code = params.get('code');
         if (code) {
           (async () => {
@@ -347,11 +364,12 @@
       }, []);
 
       // 啟動時嘗試載入雲端資料（含資料遷移）
+      // 只要不是 code 短碼模式，就用固定 key 讀取
       useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         if (params.get('code')) return; // 短碼模式不載入雲端
         (async () => {
-          const remote = await loadRemoteAll();
+          const remote = await loadRemoteAll(remoteKey);
           if (remote) {
             setEmployees(remote.employees || []);
             setColorMap(remote.colorMap || {});
@@ -365,7 +383,7 @@
             setAssignments(migratedByYM[ymKey(year, month)] || {});
           }
         })();
-      }, []);
+      }, [remoteKey]);
 
       // 員工顏色保持穩定
       useEffect(() => {
@@ -394,7 +412,7 @@
         const ym = ymKey(year, month);
         const merged = { ...assignmentsByYM, [ym]: assignments };
         const payload = { employees, colorMap, vacations, assignmentsByYM: merged };
-        await saveRemoteAll(payload);
+        await saveRemoteAll(payload, remoteKey);
         setAssignmentsByYM(merged);
         setSaved(true); setTimeout(() => setSaved(false), 1500);
       };
@@ -629,42 +647,18 @@
         return () => { el.removeEventListener('dragover', onDragOver); el.removeEventListener('drop', onDrop); };
       }, []);
 
-      // 分享：使用短碼 API
+      // 分享：固定 key URL（不再使用 code）
       const [shareLoading, setShareLoading] = useState(false);
       const copyShare = async (isReadOnly) => {
         setShareLoading(true);
         try {
-          const payload = {
-            v: 3,
-            year,
-            month,
-            employees,
-            colorMap,
-            vacations,
-            assignmentsByYM: { ...assignmentsByYM, [ymKey(year, month)]: assignments }
-          };
-          const res = await fetch(`${API_BASE}?action=share`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-          if (res.ok) {
-            const { code } = await res.json();
-            const u = new URL(window.location.href);
-            u.search = '';
-            u.hash = '';
-            u.searchParams.set('code', code);
-            if (isReadOnly) u.searchParams.set('readOnly', '1');
-            await navigator.clipboard.writeText(u.toString());
-            setSaved(true); setTimeout(() => setSaved(false), 1500);
-          } else {
-            // Fallback: 使用舊版 hash 方式
-            const u = new URL(window.location.href);
-            u.hash = 's=' + encodeShareLegacy(payload);
-            if (isReadOnly) u.searchParams.set('readOnly', '1'); else u.searchParams.delete('readOnly');
-            await navigator.clipboard.writeText(u.toString());
-            setSaved(true); setTimeout(() => setSaved(false), 1500);
-          }
+          const u = new URL(window.location.href);
+          u.search = '';
+          u.hash = '';
+          u.searchParams.set('key', remoteKey || REMOTE_KEY);
+          if (isReadOnly) u.searchParams.set('readOnly', '1');
+          await navigator.clipboard.writeText(u.toString());
+          setSaved(true); setTimeout(() => setSaved(false), 1500);
         } catch (e) {
           console.error('分享失敗', e);
           alert('分享失敗，請稍後再試');
