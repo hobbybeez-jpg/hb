@@ -70,8 +70,23 @@
     // blank = 上半區空白欄；blank2 = 下半區空白欄。
     const POSITIONS = ['S', 'P', 'blank', 'F', 'M', 'blank2'];
     const BLANK_POSITIONS = ['blank', 'blank2'];
+    const LOCATION_A_POSITIONS = ['S', 'P', 'blank'];
+    const LOCATION_B_POSITIONS = ['F', 'M', 'blank2'];
     const isBlankPosition = (pos) => BLANK_POSITIONS.includes(pos);
-    const blankForPosition = (pos) => (pos === 'S' || pos === 'P' || pos === 'blank') ? 'blank' : 'blank2';
+    const locationForPosition = (pos) => LOCATION_A_POSITIONS.includes(pos) ? 'A' : 'B';
+    const blankForPosition = (pos) => locationForPosition(pos) === 'A' ? 'blank' : 'blank2';
+
+    // 從指定 location 移除某員工，確保同一天不會同時出現在兩個 location。
+    const removeEmpFromLocation = (dayAsg, empId, location) => {
+      const positions = location === 'A' ? LOCATION_A_POSITIONS : LOCATION_B_POSITIONS;
+      positions.forEach(p => {
+        if (isBlankPosition(p)) {
+          dayAsg[p] = (dayAsg[p] || []).filter(id => id !== empId);
+        } else if (dayAsg[p] === empId) {
+          dayAsg[p] = null;
+        }
+      });
+    };
 
     // === Utils（週日為每週第一天） ===
     const ymKey = (y, m) => `${y}-${String(m + 1).padStart(2, '0')}`; // m:0-11
@@ -543,8 +558,11 @@
         });
       };
 
-      // 拖放處理：同日維持移動；跨日改為複製，來源日期不移除。
-      // 若目標職務已有員工，原員工移到該 location 對應的空白欄。
+      // 拖放處理：
+      // 1) 同一天內拖曳視為移動，來源位置會移除。
+      // 2) 跨日拖曳仍為複製，來源日期保留。
+      // 3) 但目標日期若同一員工已在另一個 location，會先移除另一個 location 的排班。
+      // 4) 若目標職務已有員工，原員工移到該 location 對應的空白欄。
       const handleDrop = (day, pos, payload) => {
         const { empId, fromDay, fromPos } = payload;
         const sameDay = fromDay && Number(fromDay) === Number(day);
@@ -556,8 +574,15 @@
           const dayKey = String(day);
           const dayAsg = next[dayKey] || { S: null, P: null, F: null, M: null, blank: [], blank2: [] };
           const updated = { ...dayAsg, blank: [...(dayAsg.blank || [])], blank2: [...(dayAsg.blank2 || [])] };
+          const targetLocation = locationForPosition(pos);
+          const otherLocation = targetLocation === 'A' ? 'B' : 'A';
 
-          // 同一天內拖曳仍視為移動，避免同一員工在同一天因調整位置而重複。
+          // 無論名牌來自員工名單、同日或跨日，目標日期都不能同時排在另一個 location。
+          // 例如：11 日 Location A 已有此員工，拖到 11 日 Location B 時，先清掉 A，再排到 B。
+          removeEmpFromLocation(updated, empId, otherLocation);
+
+          // 同一天內拖曳仍視為移動，所以原先位置要消除。
+          // 跨日則不動來源日期，維持「複製到新日期」的既有需求。
           if (sameDay && fromPos) {
             if (isBlankPosition(fromPos)) {
               updated[fromPos] = updated[fromPos].filter(id => id !== empId);
@@ -567,12 +592,16 @@
           }
 
           if (isBlankPosition(pos)) {
-            // 空白欄可放多人。跨日拖曳只新增，不移除來源日期。
             if (!updated[pos].includes(empId)) updated[pos].push(empId);
           } else {
             const existingEmpId = updated[pos];
             if (existingEmpId && existingEmpId !== empId) {
               const targetBlank = blankForPosition(pos);
+
+              // 被替換的員工也必須維持同一天只在單一 location。
+              const existingOtherLocation = targetLocation === 'A' ? 'B' : 'A';
+              removeEmpFromLocation(updated, existingEmpId, existingOtherLocation);
+
               if (!updated[targetBlank].includes(existingEmpId)) updated[targetBlank].push(existingEmpId);
             }
             updated[pos] = empId;
