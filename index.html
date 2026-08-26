@@ -66,7 +66,12 @@
     const { useEffect, useMemo, useRef, useState, useLayoutEffect } = React;
 
     // === 職務欄位定義 ===
-    const POSITIONS = ['S', 'P', 'F', 'M', 'blank']; // blank 可排複數員工
+    // P 保留作為第二個 S 的資料欄位，避免破壞既有班表資料結構。
+    // blank = 上半區空白欄；blank2 = 下半區空白欄。
+    const POSITIONS = ['S', 'P', 'blank', 'F', 'M', 'blank2'];
+    const BLANK_POSITIONS = ['blank', 'blank2'];
+    const isBlankPosition = (pos) => BLANK_POSITIONS.includes(pos);
+    const blankForPosition = (pos) => (pos === 'S' || pos === 'P' || pos === 'blank') ? 'blank' : 'blank2';
 
     // === Utils（週日為每週第一天） ===
     const ymKey = (y, m) => `${y}-${String(m + 1).padStart(2, '0')}`; // m:0-11
@@ -86,11 +91,15 @@
       const newAssign = {};
       Object.entries(oldAssign).forEach(([day, val]) => {
         if (Array.isArray(val)) {
-          // 舊版格式：[empId, empId, ...]
-          newAssign[day] = { S: null, P: null, F: null, M: null, blank: [...val] };
+          // 舊版格式：[empId, empId, ...]，保留在上半區空白欄
+          newAssign[day] = { S: null, P: null, F: null, M: null, blank: [...val], blank2: [] };
         } else if (typeof val === 'object' && val !== null) {
-          // 新版格式，直接使用
-          newAssign[day] = val;
+          // 現有 P 資料保留，畫面上改顯示為第二個 S；舊 blank 保留在上半區。
+          newAssign[day] = {
+            ...val,
+            blank: Array.isArray(val.blank) ? [...val.blank] : [],
+            blank2: Array.isArray(val.blank2) ? [...val.blank2] : []
+          };
         }
       });
       return newAssign;
@@ -99,7 +108,7 @@
     // 取得某日某職務的員工列表
     const getPositionEmps = (dayAssign, pos) => {
       if (!dayAssign) return [];
-      if (pos === 'blank') return dayAssign.blank || [];
+      if (isBlankPosition(pos)) return dayAssign[pos] || [];
       return dayAssign[pos] ? [dayAssign[pos]] : [];
     };
 
@@ -448,14 +457,14 @@
             // 清除各職務欄中的員工
             const updated = { ...dayAsg };
             POSITIONS.forEach(pos => {
-              if (pos === 'blank') {
-                updated.blank = (updated.blank || []).filter(id => id !== empId);
+              if (isBlankPosition(pos)) {
+                updated[pos] = (updated[pos] || []).filter(id => id !== empId);
               } else if (updated[pos] === empId) {
                 updated[pos] = null;
               }
             });
             // 檢查是否還有員工
-            const hasAny = POSITIONS.some(p => p === 'blank' ? updated.blank?.length > 0 : updated[p] != null);
+            const hasAny = POSITIONS.some(p => isBlankPosition(p) ? updated[p]?.length > 0 : updated[p] != null);
             if (hasAny) next[day] = updated; else delete next[day];
           });
           return next;
@@ -478,9 +487,9 @@
         ];
         // 新版資料結構：每日分職務欄
         const asg = {
-          '2': { S: emps[0].id, P: emps[1].id, F: null, M: null, blank: [] },
-          '5': { S: emps[2].id, P: null, F: null, M: null, blank: [] },
-          '9': { S: emps[3].id, P: emps[0].id, F: emps[1].id, M: null, blank: [emps[2].id] },
+          '2': { S: emps[0].id, P: emps[1].id, F: null, M: null, blank: [], blank2: [] },
+          '5': { S: emps[2].id, P: null, F: null, M: null, blank: [], blank2: [] },
+          '9': { S: emps[3].id, P: emps[0].id, F: emps[1].id, M: null, blank: [emps[2].id], blank2: [] },
         };
         setEmployees(emps);
         setAssignments(asg);
@@ -498,18 +507,17 @@
       };
       const onDragStartFromCell = (e, empId, day, pos) => {
         e.dataTransfer.setData('text/plain', JSON.stringify({ empId, fromDay: day, fromPos: pos }));
-        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.effectAllowed = 'copyMove';
       };
 
       // 新增員工到某日某職務
       const addToPosition = (day, pos, empId) => {
         setAssignments(prev => {
           const dayKey = String(day);
-          const dayAsg = prev[dayKey] || { S: null, P: null, F: null, M: null, blank: [] };
-          const updated = { ...dayAsg };
-          if (pos === 'blank') {
-            if (!updated.blank) updated.blank = [];
-            if (!updated.blank.includes(empId)) updated.blank = [...updated.blank, empId];
+          const dayAsg = prev[dayKey] || { S: null, P: null, F: null, M: null, blank: [], blank2: [] };
+          const updated = { ...dayAsg, blank: [...(dayAsg.blank || [])], blank2: [...(dayAsg.blank2 || [])] };
+          if (isBlankPosition(pos)) {
+            if (!updated[pos].includes(empId)) updated[pos].push(empId);
           } else {
             updated[pos] = empId;
           }
@@ -523,19 +531,20 @@
           const dayKey = String(day);
           const dayAsg = prev[dayKey];
           if (!dayAsg) return prev;
-          const updated = { ...dayAsg };
-          if (pos === 'blank') {
-            updated.blank = (updated.blank || []).filter(id => id !== empId);
+          const updated = { ...dayAsg, blank: [...(dayAsg.blank || [])], blank2: [...(dayAsg.blank2 || [])] };
+          if (isBlankPosition(pos)) {
+            updated[pos] = updated[pos].filter(id => id !== empId);
           } else if (updated[pos] === empId) {
             updated[pos] = null;
           }
-          const hasAny = POSITIONS.some(p => p === 'blank' ? updated.blank?.length > 0 : updated[p] != null);
+          const hasAny = POSITIONS.some(p => isBlankPosition(p) ? updated[p]?.length > 0 : updated[p] != null);
           if (hasAny) return { ...prev, [dayKey]: updated };
           const next = { ...prev }; delete next[dayKey]; return next;
         });
       };
 
-      // 拖放處理（支援同日職務間移動/替換）
+      // 拖放處理：同日維持移動；跨日改為複製，來源日期不移除。
+      // 若目標職務已有員工，原員工移到該 location 對應的空白欄。
       const handleDrop = (day, pos, payload) => {
         const { empId, fromDay, fromPos } = payload;
         const sameDay = fromDay && Number(fromDay) === Number(day);
@@ -545,70 +554,26 @@
         setAssignments(prev => {
           const next = { ...prev };
           const dayKey = String(day);
+          const dayAsg = next[dayKey] || { S: null, P: null, F: null, M: null, blank: [], blank2: [] };
+          const updated = { ...dayAsg, blank: [...(dayAsg.blank || [])], blank2: [...(dayAsg.blank2 || [])] };
 
-          // 同日替換：特殊處理
-          if (sameDay) {
-            const dayAsg = next[dayKey] || { S: null, P: null, F: null, M: null, blank: [] };
-            const updated = { ...dayAsg, blank: [...(dayAsg.blank || [])] };
-
-            // 取得目標位置和來源位置的員工
-            let targetEmpId = null;
-            if (pos !== 'blank') {
-              targetEmpId = updated[pos];
-            }
-
-            // 從來源位置移除
-            if (fromPos === 'blank') {
-              updated.blank = updated.blank.filter(id => id !== empId);
-            } else {
-              // 把目標位置的員工放到來源位置（交換）
-              updated[fromPos] = targetEmpId;
-            }
-
-            // 添加到目標位置
-            if (pos === 'blank') {
-              if (!updated.blank.includes(empId)) updated.blank.push(empId);
-            } else {
-              updated[pos] = empId;
-            }
-
-            next[dayKey] = updated;
-            return next;
-          }
-
-          // 跨日移動
-          const dayAsg = next[dayKey] || { S: null, P: null, F: null, M: null, blank: [] };
-          const updated = { ...dayAsg, blank: [...(dayAsg.blank || [])] };
-
-          // 目標位置現有員工
-          let existingEmpId = null;
-          if (pos !== 'blank') {
-            existingEmpId = updated[pos];
-          }
-
-          // 從來源位置移除
-          if (fromDay) {
-            const fromDayKey = String(fromDay);
-            const fromDayAsg = next[fromDayKey];
-            if (fromDayAsg) {
-              const fromUpdated = { ...fromDayAsg, blank: [...(fromDayAsg.blank || [])] };
-              if (fromPos === 'blank') {
-                fromUpdated.blank = fromUpdated.blank.filter(id => id !== empId);
-              } else {
-                fromUpdated[fromPos] = null;
-              }
-              const hasAny = POSITIONS.some(p => p === 'blank' ? fromUpdated.blank?.length > 0 : fromUpdated[p] != null);
-              if (hasAny) next[fromDayKey] = fromUpdated; else delete next[fromDayKey];
+          // 同一天內拖曳仍視為移動，避免同一員工在同一天因調整位置而重複。
+          if (sameDay && fromPos) {
+            if (isBlankPosition(fromPos)) {
+              updated[fromPos] = updated[fromPos].filter(id => id !== empId);
+            } else if (updated[fromPos] === empId) {
+              updated[fromPos] = null;
             }
           }
 
-          // 添加到目標位置
-          if (pos === 'blank') {
-            if (!updated.blank.includes(empId)) updated.blank.push(empId);
+          if (isBlankPosition(pos)) {
+            // 空白欄可放多人。跨日拖曳只新增，不移除來源日期。
+            if (!updated[pos].includes(empId)) updated[pos].push(empId);
           } else {
-            // 如果目標有員工，先移到 blank
+            const existingEmpId = updated[pos];
             if (existingEmpId && existingEmpId !== empId) {
-              updated.blank.push(existingEmpId);
+              const targetBlank = blankForPosition(pos);
+              if (!updated[targetBlank].includes(existingEmpId)) updated[targetBlank].push(existingEmpId);
             }
             updated[pos] = empId;
           }
@@ -833,7 +798,7 @@
                           month={month}
                           readOnly={readOnly}
                           empList={employees}
-                          dayAssign={(assignments[String(c.d)] || { S: null, P: null, F: null, M: null, blank: [] })}
+                          dayAssign={(assignments[String(c.d)] || { S: null, P: null, F: null, M: null, blank: [], blank2: [] })}
                           highlightEmpId={highlightEmpId}
                           getEmpColor={getEmpColor}
                           onDrop={handleDrop}
@@ -856,7 +821,7 @@
       const h = hoursForDate(year, month, d);
 
       // 檢查高亮員工是否在此日
-      const allEmpsInDay = [...POSITIONS.filter(p => p !== 'blank').map(p => dayAssign[p]).filter(Boolean), ...(dayAssign.blank || [])];
+      const allEmpsInDay = POSITIONS.flatMap(pos => getPositionEmps(dayAssign, pos));
       const isHL = highlightEmpId != null && allEmpsInDay.includes(highlightEmpId);
       const isVacHL = highlightEmpId != null && isVacation(highlightEmpId, year, month, d);
 
@@ -869,33 +834,40 @@
             {!readOnly && (<span className="px-1 py-0.5 rounded bg-slate-100">{h}h</span>)}
           </div>
 
-          <div className="flex-1 flex flex-col gap-0.5">
-            {POSITIONS.map(pos => {
-              const isBlank = pos === 'blank';
-              const emps = isBlank ? (dayAssign.blank || []) : (dayAssign[pos] ? [dayAssign[pos]] : []);
-              const label = isBlank ? '' : pos;
+          <div className="flex-1 flex flex-col gap-1">
+            {[
+              ['S', 'P', 'blank'],
+              ['F', 'M', 'blank2']
+            ].map((group, groupIdx) => (
+              <div key={groupIdx} className="border-2 border-slate-600 rounded-lg p-0.5 flex flex-col gap-0.5">
+                {group.map(pos => {
+                  const isBlank = isBlankPosition(pos);
+                  const emps = isBlank ? (dayAssign[pos] || []) : (dayAssign[pos] ? [dayAssign[pos]] : []);
+                  const label = isBlank ? '' : (pos === 'P' ? 'S' : pos);
 
-              return (
-                <PositionRow
-                  key={pos}
-                  pos={pos}
-                  label={label}
-                  emps={emps}
-                  empList={empList}
-                  d={d}
-                  year={year}
-                  month={month}
-                  readOnly={readOnly}
-                  highlightEmpId={highlightEmpId}
-                  getEmpColor={getEmpColor}
-                  onDrop={onDrop}
-                  onDragStartFromCell={onDragStartFromCell}
-                  onRemove={onRemove}
-                  isVacation={isVacation}
-                  isBlank={isBlank}
-                />
-              );
-            })}
+                  return (
+                    <PositionRow
+                      key={pos}
+                      pos={pos}
+                      label={label}
+                      emps={emps}
+                      empList={empList}
+                      d={d}
+                      year={year}
+                      month={month}
+                      readOnly={readOnly}
+                      highlightEmpId={highlightEmpId}
+                      getEmpColor={getEmpColor}
+                      onDrop={onDrop}
+                      onDragStartFromCell={onDragStartFromCell}
+                      onRemove={onRemove}
+                      isVacation={isVacation}
+                      isBlank={isBlank}
+                    />
+                  );
+                })}
+              </div>
+            ))}
           </div>
         </div>
       );
