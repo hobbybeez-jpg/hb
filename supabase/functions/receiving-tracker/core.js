@@ -1210,15 +1210,22 @@ const API = {
     return API.renfrewMap(tx);
   },
 
-  async renfrewAdd(tx, { upc, locationCode, qty, productName: name }, ctx) {
+  // Items not from any shipment: one item ({ upc, locationCode, qty, productName }),
+  // or a batch scan ({ items: [{ upc, locationCode, qty, productName }] }), all saved together
+  async renfrewAdd(tx, args, ctx) {
     const user = requireUser(ctx);
-    upc = cleanUpc(upc);
-    if (!upc) throw new UserError('Enter or scan a UPC.');
-    qty = wholeNumber(qty, 'Qty', { min: 1 });
-    const loc = await requireLocation(tx, locationCode);
-    const productNameValue = cleanText(name, 200) || await productName(tx, upc);
-    await addStock(tx, { locationCode: loc.code, upc, productName: productNameValue, shipmentId: '', qty });
-    await logMove(tx, { upc, productName: productNameValue, shipmentId: '', from: null, to: loc.code, qty, reason: 'ADD', user });
+    const items = Array.isArray(args.items) ? args.items : [args];
+    if (!items.length) throw new UserError('Nothing to add.');
+    if (items.length > 500) throw new UserError('Too many items at once (max 500).');
+    for (const item of items) {
+      const upc = cleanUpc(item.upc);
+      if (!upc) throw new UserError('Enter or scan a UPC.');
+      const qty = wholeNumber(item.qty, 'Qty', { min: 1 });
+      const loc = await requireLocation(tx, item.locationCode);
+      const productNameValue = cleanText(item.productName, 200) || await productName(tx, upc);
+      await addStock(tx, { locationCode: loc.code, upc, productName: productNameValue, shipmentId: '', qty });
+      await logMove(tx, { upc, productName: productNameValue, shipmentId: '', from: null, to: loc.code, qty, reason: 'ADD', user });
+    }
     return API.renfrewMap(tx);
   },
 
