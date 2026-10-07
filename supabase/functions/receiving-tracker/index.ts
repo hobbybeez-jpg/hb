@@ -1,13 +1,13 @@
-// 進貨進度追蹤（Receiving Tracker）Edge Function
+// Receiving Tracker Edge Function
 //
-// POST /functions/v1/receiving-tracker   body: { "fn": "<名稱>", "args": { ... } }
+// POST /functions/v1/receiving-tracker   body: { "fn": "<name>", "args": { ... } }
 // Headers:
-//   Authorization: Bearer <SUPABASE_ANON_KEY>   （閘道驗證；anon key 本來就是公開金鑰）
-//   x-trk-code: 員工共用密碼（trk.settings 的 pw_access；未設定時不需要）
-//   x-trk-user: 操作人員名字（URL encoded）
-// 回應：{ ok: true, result } | { ok: false, error, code }
+//   Authorization: Bearer <SUPABASE_ANON_KEY>   (gateway check; the anon key is public by design)
+//   x-trk-code: shared staff password (pw_access in trk.settings; not needed when unset)
+//   x-trk-user: name of the person acting (URL encoded)
+// Response: { ok: true, result } | { ok: false, error, code }
 //
-// Secret（選填）：TRACKER_ALLOWED_ORIGINS，例如 https://hobbybee.netlify.app
+// Optional secret: TRACKER_ALLOWED_ORIGINS, e.g. https://hobbybee.netlify.app
 import postgres from 'npm:postgres@3.4.5';
 import { handle } from './core.js';
 
@@ -50,6 +50,6 @@ Deno.serve(async (req) => {
     const err = error as { message?: string; code?: string; name?: string };
     if (err && err.name === 'UserError') return reply({ ok: false, error: err.message, code: err.code || '' }, 200, origin);
     console.error(fn, error);
-    return reply({ ok: false, error: '系統錯誤：' + (err && err.message ? err.message : String(error)) }, 500, origin);
+    return reply({ ok: false, error: 'Server error: ' + (err && err.message ? err.message : String(error)) }, 500, origin);
   }
 });
