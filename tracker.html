@@ -432,6 +432,7 @@ function showLogin(message) {
       <form id="loginForm" class="list">
         <label class="f">Your name (recorded on each step)<input class="inp" name="name" autocomplete="name" value="${esc(store('trk_user'))}" /></label>
         <label class="f">Staff password (leave blank if none)<input class="inp" name="code" type="password" autocomplete="off" value="${esc(store('trk_code'))}" /></label>
+        <label class="row small"><input type="checkbox" name="shared" ${sharedDevice() ? 'checked' : ''} /> Shared device: clear my name after 6 hours without use</label>
         <button class="btn primary" type="submit">Enter</button>
       </form>`,
     onClose: () => { loginOpen = false; }
@@ -444,6 +445,8 @@ function showLogin(message) {
     if (!name) { form.name.focus(); return; }
     store('trk_user', name.slice(0, 40));
     store('trk_code', form.code.value);
+    store('trk_shared', form.shared.checked ? '1' : '0');
+    touchActivity(true);
     renderUser();
     try {
       await api('ping');
@@ -459,6 +462,42 @@ function showLogin(message) {
 }
 function renderUser() { $('#userChip').textContent = '👤 ' + (store('trk_user') || 'Sign in'); }
 $('#userChip').onclick = () => showLogin('');
+
+// ---------------- Clear the name after 6 hours idle on shared devices ----------------
+// Phones are usually personal and keep the name; computers and tablets count as shared.
+// The choice is remembered per device and can be changed in the sign-in dialog.
+// Only taps, clicks, typing and scans count as use; the automatic refresh does not.
+const IDLE_LIMIT_MS = 6 * 60 * 60 * 1000;
+function isPhone() { return window.matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 600; }
+function sharedDevice() { const v = store('trk_shared'); return v ? v === '1' : !isPhone(); }
+let lastActivityWrite = 0;
+function touchActivity(force) {
+  const now = Date.now();
+  if (!force && now - lastActivityWrite < 60000) return;
+  lastActivityWrite = now;
+  store('trk_seen', String(now));
+}
+function idleSignOut() {
+  if (!sharedDevice() || !store('trk_user')) return false;
+  const seen = Number(store('trk_seen')) || 0;
+  if (!seen) { touchActivity(true); return false; }
+  if (Date.now() - seen < IDLE_LIMIT_MS) return false;
+  store('trk_user', '');
+  renderUser();
+  $$('.modal-bg').forEach((x) => x.remove());
+  const cam = $('#cam'); if (cam) $('button', cam).click();
+  loginOpen = false;
+  showLogin('Signed out after 6 hours without use. Please enter your name.');
+  return true;
+}
+const onActivity = (e) => {
+  if (idleSignOut()) { e.preventDefault(); e.stopPropagation(); return; }
+  touchActivity();
+};
+document.addEventListener('pointerdown', onActivity, true);
+document.addEventListener('keydown', onActivity, true);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) idleSignOut(); });
+setInterval(idleSignOut, 60000);
 
 // ---------------- Tabs ----------------
 function setTab(tab) {
@@ -1314,8 +1353,10 @@ if (!(window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 900
 
 // ---------------- Start ----------------
 renderUser();
-if (!store('trk_user')) showLogin('');
-else { loadList(); api('renfrewMap').then((m) => { state.map = m; renderPutBadge(); }).catch(() => {}); }
+if (!idleSignOut()) {
+  if (!store('trk_user')) showLogin('');
+  else { loadList(); api('renfrewMap').then((m) => { state.map = m; renderPutBadge(); }).catch(() => {}); }
+}
 setInterval(() => {
   if (document.hidden || $('.modal-bg') || $('#cam') || !store('trk_user')) return;
   if (state.tab === 'list' && !state.detailId) loadList();
