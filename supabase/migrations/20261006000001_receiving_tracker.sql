@@ -27,8 +27,10 @@ create table if not exists trk.shipments (
   s3_at timestamptz, s3_by text,           -- 主管1：確認入庫存
   s4a_at timestamptz, s4a_by text,         -- 主管2：上架系統
   s4b_at timestamptz, s4b_by text, s4b_note text,  -- Renfrew：清點無誤
-  s5_at timestamptz, s5_by text, s5_note text      -- Renfrew：上架店內（完成後隱藏）
+  s5_at timestamptz, s5_by text, s5_note text,     -- Renfrew：上架店內（完成後隱藏）
+  ignored boolean not null default false           -- true＝不追蹤（例如長期開著的 Store Transfer）
 );
+alter table trk.shipments add column if not exists ignored boolean not null default false;
 create index if not exists trk_shipments_open_idx on trk.shipments (s5_at, created_at desc);
 
 -- 步驟紀錄（完成 / 撤銷）
@@ -105,13 +107,13 @@ on conflict (code) do nothing;
 insert into trk.settings (key, value) values ('go_live', to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
 on conflict (key) do nothing;
 
--- 上線時尚未 Finalize 的點貨單也一併追蹤（步驟 1 已完成）
+-- 上線時尚未 Finalize、且是最近 14 天建立的點貨單也一併追蹤（步驟 1 已完成）
 do $$
 begin
   if to_regclass('wh.shipments') is not null then
     insert into trk.shipments (shipment_id, supplier, name, created_at)
     select shipment_id, supplier, name, created_at from wh.shipments
-    where coalesce(status, '') <> 'FINALIZED'
+    where coalesce(status, '') <> 'FINALIZED' and created_at >= now() - interval '14 days'
     on conflict (shipment_id) do nothing;
   end if;
 end $$;

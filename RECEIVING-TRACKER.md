@@ -77,6 +77,8 @@ on conflict (key) do update set value = excluded.value, updated_at = now();
 ## 連動方式（技術說明）
 
 - 追蹤清單：`trk.shipments`，每次開啟清單時把 `go_live` 之後在 `wh.shipments` 建立的點貨單加入。
+  不想追蹤的（例如長期開著的 Store Transfer）：`update trk.shipments set ignored = true where shipment_id = '...';`（改回 `false` 即恢復）。
+  上線時已把 2026-10-01 以前建立、仍未 Finalize 的 6 筆（Anirevo 2026、New Store Transfer ×2、Walmart、Store Transfer、Plamod）設為 ignored。
   要把較舊的點貨單加入追蹤：`insert into trk.shipments (shipment_id, supplier, name, created_at) select shipment_id, supplier, name, created_at from wh.shipments where shipment_id = '...';`
 - 明細：即時讀取 `wh.shipment_lines`、`wh.products`、`wh.allocations`（封存後改讀 `*_archive`）。
   - PO＝`required_po_qty`；已分配＝PO 分配＋已揀貨出貨的 PO。

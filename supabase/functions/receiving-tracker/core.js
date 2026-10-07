@@ -119,6 +119,13 @@ const SHIPMENT_COLUMNS = `
   (s.shipment_id is null) as wh_missing,
   t.s2_at, t.s2_by, t.s3_at, t.s3_by, t.s4a_at, t.s4a_by, t.s4b_at, t.s4b_by, t.s4b_note, t.s5_at, t.s5_by, t.s5_note`;
 
+// 庫存系統有些點貨單沒有名稱，改用 shipment_id 的「|」後面那段
+function displayName(name, shipmentId) {
+  if (name) return name;
+  const id = String(shipmentId || '');
+  return id.includes('|') ? id.slice(id.indexOf('|') + 1) : id;
+}
+
 function shipmentOut(row) {
   const steps = { '1': { at: row.created_at, by: '' } };
   for (const step of STEPS) {
@@ -128,7 +135,7 @@ function shipmentOut(row) {
   return {
     shipmentId: row.shipment_id,
     supplier: row.supplier || '',
-    name: row.name || '',
+    name: displayName(row.name, row.shipment_id),
     createdAt: row.created_at,
     whStatus: row.wh_status || (row.wh_missing ? 'MISSING' : ''),
     whFinalizedAt: row.wh_finalized_at || null,
@@ -267,7 +274,7 @@ async function shipmentLabels(tx, ids) {
     [JSON.stringify(list)]
   );
   const out = {};
-  for (const r of rows) out[r.shipment_id] = { supplier: r.supplier || '', name: r.name || '', step4a: !!r.s4a_at, done: !!r.s5_at };
+  for (const r of rows) out[r.shipment_id] = { supplier: r.supplier || '', name: displayName(r.name, r.shipment_id), step4a: !!r.s4a_at, done: !!r.s5_at };
   return out;
 }
 
@@ -324,7 +331,7 @@ const API = {
           from wh.shipment_lines l where l.shipment_id = t.shipment_id`
               : 'select 0 as line_count, 0 as expected_units, 0 as received_units, 0 as renfrew_units'}
        ) agg on true
-       where ${where}
+       where not t.ignored and ${where}
        order by t.s5_at desc nulls first, coalesce(s.created_at, t.created_at) desc
        limit 300`
     );
@@ -476,7 +483,7 @@ const API = {
                 l.required_po_qty, l.required_renfrew_qty
          from wh.products p
          join wh.shipment_lines l on l.product_id = p.product_id
-         join trk.shipments t on t.shipment_id = l.shipment_id
+         join trk.shipments t on t.shipment_id = l.shipment_id and not t.ignored
          ${whJoin(true)}
          where ltrim(p.upc, '0') = ltrim($1, '0') and p.upc <> ''
          order by (t.s5_at is not null), coalesce(s.created_at, t.created_at) desc
