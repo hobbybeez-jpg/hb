@@ -1,0 +1,1248 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>進貨進度追蹤</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #fff; --ink: #1d2433; --muted: #6b7385; --line: #e2e5ea;
+    --brand: #1f6feb; --brand-ink: #fff; --ok: #1a7f37; --ok-bg: #dcf5e3; --warn: #9a6700; --warn-bg: #fff4d6;
+    --bad: #c62828; --bad-bg: #fde4e4; --todo: #d5d9e0; --now: #f0a020; --pending: #8250df; --pending-bg: #f1e9ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  a { color: var(--brand); }
+  .hidden { display: none !important; }
+  .muted { color: var(--muted); }
+  .small { font-size: 13px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+  .nowrap { white-space: nowrap; }
+  .right { text-align: right; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .grow { flex: 1 1 auto; }
+
+  header { position: sticky; top: 0; z-index: 20; background: #1d2433; color: #fff; }
+  .bar { max-width: 1200px; margin: 0 auto; display: flex; align-items: center; gap: 12px; padding: 10px 16px; }
+  .bar h1 { font-size: 17px; margin: 0; white-space: nowrap; }
+  .user-chip { margin-left: auto; background: rgba(255,255,255,.12); border: 0; color: #fff; padding: 6px 10px; border-radius: 999px; font-size: 13px; white-space: nowrap; }
+  nav.tabs { max-width: 1200px; margin: 0 auto; display: flex; gap: 4px; padding: 0 12px; overflow-x: auto; scrollbar-width: none; }
+  nav.tabs button { background: transparent; border: 0; color: #c9d1e0; padding: 9px 12px 11px; border-bottom: 3px solid transparent; white-space: nowrap; }
+  nav.tabs button.active { color: #fff; border-bottom-color: var(--now); font-weight: 600; }
+  nav.tabs .badge { background: var(--now); color: #1d2433; border-radius: 999px; padding: 0 7px; font-size: 12px; margin-left: 4px; font-weight: 700; }
+
+  main { max-width: 1200px; margin: 0 auto; padding: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .section-title { font-size: 16px; font-weight: 700; margin: 18px 0 8px; display: flex; align-items: center; gap: 8px; }
+
+  .btn { border: 1px solid var(--line); background: #fff; padding: 8px 14px; border-radius: 8px; min-height: 38px; }
+  .btn:hover { border-color: #b8bfcc; }
+  .btn.primary { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); font-weight: 600; }
+  .btn.ok { background: var(--ok); border-color: var(--ok); color: #fff; font-weight: 600; }
+  .btn.warn { background: var(--now); border-color: var(--now); color: #1d2433; font-weight: 600; }
+  .btn.danger { color: var(--bad); }
+  .btn.small { padding: 4px 10px; min-height: 30px; font-size: 13px; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .link { background: none; border: 0; color: var(--brand); padding: 0; font-size: 13px; }
+  input.inp, select.inp, textarea.inp { border: 1px solid #cdd3dc; border-radius: 8px; padding: 8px 10px; background: #fff; min-height: 38px; width: 100%; }
+  input.inp:focus, select.inp:focus, textarea.inp:focus { outline: 2px solid #9ec1ff; border-color: var(--brand); }
+  input.qty { width: 72px; text-align: center; }
+  .scanbox { display: flex; gap: 8px; }
+  .scanbox input { flex: 1; font-size: 17px; }
+
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 5px 12px; font-size: 14px; }
+  .chip.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; background: #eef1f5; color: var(--muted); white-space: nowrap; }
+  .tag.ok { background: var(--ok-bg); color: var(--ok); }
+  .tag.warn { background: var(--warn-bg); color: var(--warn); }
+  .tag.bad { background: var(--bad-bg); color: var(--bad); }
+  .tag.pending { background: var(--pending-bg); color: var(--pending); }
+
+  /* Shipment list */
+  .ship-list { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
+  .ship { cursor: pointer; display: flex; flex-direction: column; gap: 8px; }
+  .ship:hover { border-color: #b8bfcc; box-shadow: 0 2px 8px rgba(0,0,0,.05); }
+  .ship .sup { font-weight: 700; font-size: 16px; }
+  .ship .num { font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .ship.done { opacity: .75; }
+  .progress { display: flex; gap: 3px; height: 10px; }
+  .progress .seg { flex: 1; background: var(--todo); border-radius: 3px; }
+  .progress { height: 14px; }
+  .progress .branch { flex: 2; display: flex; flex-direction: column; gap: 2px; }
+  .progress .branch > div { flex: 1; display: flex; gap: 3px; }
+  .progress .branch span { flex: 1; background: var(--todo); border-radius: 2px; }
+  .progress .done { background: var(--ok) !important; }
+  .progress .now { background: var(--now) !important; }
+  .next { font-size: 13px; }
+
+  /* Detail */
+  .detail-head { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+  .detail-head h2 { margin: 0; font-size: 20px; }
+  .stepper { display: grid; grid-template-columns: 1fr 1fr 2fr 1fr; gap: 8px; margin-top: 14px; }
+  .stepper .branch { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stepper .branch .step:last-child { grid-column: span 2; min-height: 0; }
+  .lane { font-size: 11px; color: var(--muted); }
+  .step { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fafbfc; display: flex; flex-direction: column; gap: 4px; min-height: 92px; }
+  .step .t { font-weight: 700; font-size: 14px; }
+  .step .n { display: inline-flex; width: 26px; height: 22px; border-radius: 6px; align-items: center; justify-content: center; background: var(--todo); font-size: 12px; font-weight: 700; margin-right: 6px; }
+  .step.done { background: var(--ok-bg); border-color: #a9e0b8; }
+  .step.done .n { background: var(--ok); color: #fff; }
+  .step.now { background: #fff8e8; border-color: var(--now); }
+  .step.now .n { background: var(--now); }
+  .step .who { font-size: 12px; color: var(--muted); }
+  .step .btn { margin-top: auto; }
+
+  table.grid { width: 100%; border-collapse: collapse; background: #fff; }
+  table.grid th, table.grid td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: top; }
+  table.grid th { font-size: 12px; color: var(--muted); font-weight: 600; background: #fafbfc; position: sticky; top: 0; }
+  table.grid td.num, table.grid th.num { text-align: center; }
+  table.grid tr.hit td { background: #fff4c2; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+  .alloc { font-weight: 700; font-size: 15px; }
+  .alloc-sub { font-size: 12px; color: var(--muted); }
+  .alloc.zero { color: #b8bfcc; font-weight: 400; }
+
+  /* Renfrew map */
+  .racks { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+  .rack { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+  .rack h3 { margin: 0 0 8px; font-size: 18px; display: flex; justify-content: space-between; align-items: baseline; }
+  .rack.pending { border-color: var(--pending); background: var(--pending-bg); }
+  .cells { display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); }
+  .cell { border: 1px solid #cdd3dc; background: #f8f9fb; border-radius: 8px; padding: 8px 6px; text-align: center; cursor: pointer; }
+  .cell .c { font-weight: 700; font-size: 14px; }
+  .cell .q { font-size: 12px; color: var(--muted); }
+  .cell.has { background: #e7f0ff; border-color: #9ec1ff; }
+  .cell.hit { outline: 3px solid var(--now); background: #fff4c2; }
+  .cell.sel { outline: 3px solid var(--brand); }
+
+  .list { display: flex; flex-direction: column; gap: 6px; }
+  .item { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; flex-wrap: wrap; }
+  .item .nm { flex: 1 1 220px; min-width: 0; }
+  .item .nm b { display: block; overflow-wrap: anywhere; }
+  .item.flash { animation: flash 1.2s; }
+  @keyframes flash { from { background: #fff4c2; } to { background: #fff; } }
+
+  /* Modal */
+  .modal-bg { position: fixed; inset: 0; background: rgba(15,20,30,.45); z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .modal { background: #fff; border-radius: 12px; width: min(720px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.25); }
+  .modal.narrow { width: min(420px, 100%); }
+  .modal .mh { padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+  .modal .mh h3 { margin: 0; font-size: 17px; flex: 1; }
+  .modal .mb { padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+  .modal .mf { padding: 12px 16px; border-top: 1px solid var(--line); display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+  .x { background: none; border: 0; font-size: 22px; line-height: 1; color: var(--muted); padding: 4px 8px; }
+  label.f { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  .err { color: var(--bad); font-size: 14px; }
+  .note-box { background: var(--warn-bg); color: var(--warn); border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 80; display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; }
+  #toast div { background: #1d2433; color: #fff; padding: 10px 16px; border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,.2); max-width: 90vw; }
+  #toast div.bad { background: var(--bad); }
+  #toast div.ok { background: var(--ok); }
+
+  /* Camera */
+  #cam { position: fixed; inset: 0; background: #000; z-index: 90; display: flex; flex-direction: column; }
+  #cam video { flex: 1; width: 100%; object-fit: cover; min-height: 0; }
+  #cam .cam-bar { display: flex; gap: 8px; padding: 12px; background: #111; color: #fff; align-items: center; }
+  #cam .cam-msg { flex: 1; font-size: 15px; }
+  #cam .frame { position: absolute; left: 10%; right: 10%; top: 35%; height: 22%; border: 3px solid rgba(255,255,255,.8); border-radius: 12px; pointer-events: none; }
+
+  .empty { text-align: center; color: var(--muted); padding: 30px 10px; }
+  .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid #ccd; border-top-color: var(--brand); border-radius: 50%; animation: sp .8s linear infinite; vertical-align: -2px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+
+  @media (max-width: 760px) {
+    main { padding: 12px; }
+    .ship-list { grid-template-columns: 1fr; }
+    .stepper { grid-template-columns: 1fr 1fr; }
+    .stepper .branch { grid-column: span 2; }
+    .stepper > .step:last-child { grid-column: span 2; }
+    input.inp, select.inp, textarea.inp { font-size: 16px; }
+    .modal-bg { align-items: flex-end; padding: 0; }
+    .modal { border-radius: 14px 14px 0 0; max-height: 92vh; }
+    .hide-sm { display: none !important; }
+    .show-sm { display: flex !important; }
+  }
+  .show-sm { display: none; }
+  .line-card { flex-direction: column; align-items: stretch; gap: 6px; }
+  .line-card.hit { background: #fff4c2; }
+  .qgrid { table-layout: fixed; border-collapse: collapse; }
+  .qgrid td { text-align: center; padding: 2px; vertical-align: top; }
+  .qgrid .h { font-size: 11px; color: var(--muted); font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>🐝 進貨進度追蹤</h1>
+    <button class="user-chip" id="userChip" type="button">👤 —</button>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button data-tab="list" class="active">進貨表</button>
+    <button data-tab="search">掃描查詢</button>
+    <button data-tab="renfrew">Renfrew 倉庫<span class="badge hidden" id="putBadge"></span></button>
+    <button data-tab="log">異動紀錄</button>
+    <button data-tab="settings">設定</button>
+  </nav>
+</header>
+
+<main>
+  <!-- 進貨表 -->
+  <section id="tab-list">
+    <div id="listView">
+      <div class="row" style="margin-bottom:12px">
+        <div class="chips" id="filterChips">
+          <button class="chip active" data-filter="open">進行中</button>
+          <button class="chip" data-filter="done">已完成</button>
+          <button class="chip" data-filter="all">全部</button>
+        </div>
+        <input class="inp grow" id="listFilter" placeholder="篩選供應商 / 進貨表編號" style="max-width:320px" />
+        <button class="btn" id="refreshList" type="button">重新整理</button>
+      </div>
+      <div id="shipList" class="ship-list"></div>
+    </div>
+    <div id="detailView" class="hidden"></div>
+  </section>
+
+  <!-- 掃描查詢 -->
+  <section id="tab-search" class="hidden">
+    <div class="card">
+      <div class="small muted" style="margin-bottom:6px">掃描或輸入 UPC，查看商品屬於哪個進貨表（未完成的排在前面），以及在 Renfrew 倉庫的位置。</div>
+      <form class="scanbox" id="searchForm">
+        <input class="inp" id="searchInput" inputmode="numeric" autocomplete="off" placeholder="UPC" />
+        <button class="btn scan-btn" type="button" data-scan-for="searchInput">📷 掃描</button>
+        <button class="btn primary" type="submit">查詢</button>
+      </form>
+    </div>
+    <div id="searchResult"></div>
+  </section>
+
+  <!-- Renfrew 倉庫 -->
+  <section id="tab-renfrew" class="hidden">
+    <div class="row" style="margin-bottom:12px">
+      <button class="btn warn" id="btnPutaway" type="button">待歸架 <span id="putCount"></span></button>
+      <button class="btn" id="btnScanOut" type="button" style="border-color:var(--pending);color:var(--pending);font-weight:600">掃描移出 Pending（上架店內）</button>
+      <button class="btn" id="btnAddStock" type="button">＋ 手動加入商品</button>
+      <button class="btn" id="btnLocations" type="button">管理格位</button>
+      <button class="btn" id="refreshMap" type="button">重新整理</button>
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <form class="scanbox" id="mapFindForm">
+        <input class="inp" id="mapFind" inputmode="numeric" autocomplete="off" placeholder="掃描 UPC 找位置" />
+        <button class="btn scan-btn" type="button" data-scan-for="mapFind">📷 掃描</button>
+        <button class="btn primary" type="submit">找</button>
+        <button class="btn" type="button" id="mapFindClear">清除</button>
+      </form>
+      <div id="mapFindResult" class="small" style="margin-top:6px"></div>
+    </div>
+    <div id="racks" class="racks"></div>
+    <div id="cellPanel"></div>
+  </section>
+
+  <!-- 異動紀錄 -->
+  <section id="tab-log" class="hidden">
+    <div class="card" style="margin-bottom:12px">
+      <form class="scanbox" id="logForm">
+        <input class="inp" id="logUpc" inputmode="numeric" autocomplete="off" placeholder="UPC（留空＝最近 200 筆）" />
+        <button class="btn primary" type="submit">查詢</button>
+      </form>
+    </div>
+    <div id="logResult"></div>
+  </section>
+
+  <!-- 設定 -->
+  <section id="tab-settings" class="hidden">
+    <div class="card" style="max-width:560px">
+      <div class="section-title" style="margin-top:0">變更密碼</div>
+      <div class="small muted" style="margin-bottom:10px">需要輸入主管密碼（管理密碼；未設定時可用主管1或主管2的密碼）。員工密碼留空＝不需要員工密碼。</div>
+      <form id="pwForm" class="list">
+        <label class="f">要變更的密碼
+          <select class="inp" id="pwKey">
+            <option value="pw_step3">主管1：確認入庫存（步驟 3）</option>
+            <option value="pw_step4a">主管2：上架系統（步驟 4a）</option>
+            <option value="pw_admin">管理密碼（撤銷步驟、管理格位）</option>
+            <option value="pw_access">員工密碼（進入系統）</option>
+          </select>
+        </label>
+        <label class="f">新密碼<input class="inp" id="pwNew" type="password" autocomplete="new-password" /></label>
+        <label class="f">主管密碼<input class="inp" id="pwAdmin" type="password" autocomplete="off" /></label>
+        <div><button class="btn primary" type="submit">儲存</button></div>
+      </form>
+      <div id="pwStatus" class="small muted" style="margin-top:10px"></div>
+    </div>
+    <div class="card small muted" style="max-width:560px;margin-top:12px">
+      <b>流程</b><br />
+      1 庫存系統人員匯入點貨單（自動出現在這裡）→ 2 倉庫點好數量按「數量已確認」→ 分成兩條平行支線：
+      【3 主管1 確認入庫存（密碼）→ 4a 主管2 上架系統（密碼）】與【4b Renfrew 店員清點並歸架】→
+      5 兩條都完成後，Renfrew 店員掃描 Pending 商品上架店內，完成後進貨表自動隱藏。
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+// ---------------- 設定 ----------------
+const SUPABASE_URL = 'https://ibizemppcvlllhczjkgu.supabase.co';
+// anon key 本來就是公開金鑰；真正的權限由 Edge Function 的員工密碼與主管密碼控制
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImliaXplbXBwY3ZsbGxoY3pqa2d1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAzODE3NDEsImV4cCI6MjEwNTk1Nzc0MX0.dQsH967XdQ920DVzp2XB84S8JlhueWjNOgatC5OaOCI';
+const LOCAL = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+const API_URL = LOCAL ? '/api/receiving-tracker' : SUPABASE_URL + '/functions/v1/receiving-tracker';
+
+const STEP_LABELS = { '1': '匯入點貨單', '2': '數量已確認', '3': '確認入庫存', '4a': '上架系統', '4b': 'Renfrew 清點', '5': '上架店內' };
+const STEP_WHO = { '1': '庫存系統人員', '2': '倉庫人員', '3': '主管1', '4a': '主管2', '4b': 'Renfrew 店員', '5': 'Renfrew 店員' };
+const REMOVE_REASONS = { TO_STORE: '上架店內', SOLD: '售出', DAMAGED: '損壞', ADJUST: '數量調整', OTHER: '其他' };
+const MOVE_REASONS = { PUTAWAY: '歸架', MOVE: '移動', ADD: '手動加入', TO_STORE: '上架店內', SOLD: '售出', DAMAGED: '損壞', ADJUST: '數量調整', OTHER: '其他' };
+
+const state = {
+  tab: 'list', filter: 'open', shipments: [], detail: null, detailId: '', highlightUpc: '',
+  map: null, selectedCell: '', findUpc: '', findCodes: new Set()
+};
+
+// ---------------- 小工具 ----------------
+const $ = (sel, root) => (root || document).querySelector(sel);
+const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function store(key, value) { try { if (value === undefined) return localStorage.getItem(key) || ''; localStorage.setItem(key, value); } catch (e) { return ''; } return value; }
+function fmtDate(v) { if (!v) return ''; const d = new Date(v); return isNaN(d) ? '' : d.toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' }); }
+function fmtTime(v) { if (!v) return ''; const d = new Date(v); return isNaN(d) ? '' : d.toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }); }
+function toast(msg, kind) {
+  const el = document.createElement('div');
+  el.className = kind || '';
+  el.textContent = msg;
+  $('#toast').appendChild(el);
+  setTimeout(() => el.remove(), kind === 'bad' ? 5000 : 2600);
+}
+function beep(ok) {
+  try {
+    const ctx = beep.ctx || (beep.ctx = new (window.AudioContext || window.webkitAudioContext)());
+    const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.frequency.value = ok ? 880 : 220; g.gain.value = 0.08;
+    o.connect(g); g.connect(ctx.destination); o.start(); o.stop(ctx.currentTime + (ok ? 0.08 : 0.25));
+  } catch (e) { /* 沒有聲音也沒關係 */ }
+}
+function shipLabel(s) { return s ? `${s.supplier} · ${s.name}` : '（無進貨表）'; }
+function upcEq(a, b) { return String(a || '').replace(/^0+/, '') === String(b || '').replace(/^0+/, ''); }
+
+// ---------------- API ----------------
+async function api(fn, args) {
+  let res;
+  try {
+    res = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
+        apikey: SUPABASE_ANON_KEY,
+        'x-trk-code': store('trk_code'),
+        'x-trk-user': encodeURIComponent(store('trk_user'))
+      },
+      body: JSON.stringify({ fn, args: args || {} })
+    });
+  } catch (e) {
+    throw Object.assign(new Error('無法連線，請檢查網路。'), { code: 'NETWORK' });
+  }
+  let body;
+  try { body = await res.json(); } catch (e) { body = { ok: false, error: '伺服器錯誤（' + res.status + '）' }; }
+  if (!body.ok) {
+    const err = Object.assign(new Error(body.error || '發生錯誤'), { code: body.code || '' });
+    if (err.code === 'ACCESS' || err.code === 'NEED_USER') showLogin(err.message);
+    throw err;
+  }
+  return body.result;
+}
+
+// 需要確認（code=CONFIRM）時詢問後以 force 重送
+async function apiConfirm(fn, args) {
+  try {
+    return await api(fn, args);
+  } catch (e) {
+    if (e.code === 'CONFIRM' && confirm(e.message)) return api(fn, Object.assign({}, args, { force: true }));
+    throw e;
+  }
+}
+
+// ---------------- Modal ----------------
+function modal({ title, body, foot, narrow, onClose }) {
+  const bg = document.createElement('div');
+  bg.className = 'modal-bg';
+  bg.innerHTML = `<div class="modal ${narrow ? 'narrow' : ''}" role="dialog" aria-modal="true">
+    <div class="mh"><h3>${esc(title)}</h3><button class="x" type="button" aria-label="關閉">×</button></div>
+    <div class="mb"></div><div class="mf"></div></div>`;
+  const mb = $('.mb', bg); const mf = $('.mf', bg);
+  if (typeof body === 'string') mb.innerHTML = body; else if (body) mb.appendChild(body);
+  if (typeof foot === 'string') mf.innerHTML = foot; else if (foot) mf.appendChild(foot); else mf.remove();
+  const close = () => { bg.remove(); document.removeEventListener('keydown', onKey); if (onClose) onClose(); };
+  const onKey = (e) => { if (e.key === 'Escape' && !$('#cam')) close(); };
+  document.addEventListener('keydown', onKey);
+  $('.x', bg).onclick = close;
+  bg.addEventListener('mousedown', (e) => { if (e.target === bg) close(); });
+  document.body.appendChild(bg);
+  return { el: bg, body: mb, foot: mf, close };
+}
+
+function askPassword(title, hint) {
+  return new Promise((resolve) => {
+    const m = modal({
+      title, narrow: true,
+      body: `<div class="small muted">${esc(hint || '')}</div>
+        <form id="pwAsk"><input class="inp" type="password" autocomplete="off" placeholder="密碼" /></form>`,
+      foot: '<button class="btn" type="button" data-a="cancel">取消</button><button class="btn primary" type="button" data-a="ok">確認</button>',
+      onClose: () => resolve(null)
+    });
+    const input = $('input', m.body);
+    const done = (v) => { const r = resolve; resolve = () => {}; m.close(); r(v); };
+    $('#pwAsk', m.body).onsubmit = (e) => { e.preventDefault(); done(input.value); };
+    $('[data-a=ok]', m.foot).onclick = () => done(input.value);
+    $('[data-a=cancel]', m.foot).onclick = () => done(null);
+    setTimeout(() => input.focus(), 30);
+  });
+}
+
+// ---------------- 登入（名字＋員工密碼） ----------------
+let loginOpen = false;
+function showLogin(message) {
+  if (loginOpen) return;
+  loginOpen = true;
+  const m = modal({
+    title: '登入', narrow: true,
+    body: `${message ? `<div class="err">${esc(message)}</div>` : ''}
+      <form id="loginForm" class="list">
+        <label class="f">你的名字（記錄在每個步驟上）<input class="inp" name="name" autocomplete="name" value="${esc(store('trk_user'))}" /></label>
+        <label class="f">員工密碼（沒有設定的話留空）<input class="inp" name="code" type="password" autocomplete="off" value="${esc(store('trk_code'))}" /></label>
+        <button class="btn primary" type="submit">進入</button>
+      </form>`,
+    onClose: () => { loginOpen = false; }
+  });
+  const form = $('#loginForm', m.body);
+  setTimeout(() => (store('trk_user') ? form.code : form.name).focus(), 30);
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const name = form.name.value.trim();
+    if (!name) { form.name.focus(); return; }
+    store('trk_user', name.slice(0, 40));
+    store('trk_code', form.code.value);
+    renderUser();
+    try {
+      await api('ping');
+      loginOpen = false;
+      m.close();
+      refreshCurrent();
+    } catch (err) {
+      const box = $('.err', m.body) || m.body.insertBefore(Object.assign(document.createElement('div'), { className: 'err' }), m.body.firstChild);
+      box.textContent = err.message;
+      loginOpen = true;
+    }
+  };
+}
+function renderUser() { $('#userChip').textContent = '👤 ' + (store('trk_user') || '登入'); }
+$('#userChip').onclick = () => showLogin('');
+
+// ---------------- 分頁 ----------------
+function setTab(tab) {
+  state.tab = tab;
+  $$('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  $$('main > section').forEach((s) => s.classList.toggle('hidden', s.id !== 'tab-' + tab));
+  refreshCurrent();
+  if (tab === 'search') setTimeout(() => $('#searchInput').focus(), 30);
+}
+$$('#tabs button').forEach((b) => (b.onclick = () => {
+  if (b.dataset.tab === 'list' && state.detailId) { state.detailId = ''; state.detail = null; $('#detailView').classList.add('hidden'); $('#listView').classList.remove('hidden'); }
+  setTab(b.dataset.tab);
+}));
+
+function refreshCurrent() {
+  if (!store('trk_user')) { showLogin(''); return; }
+  if (state.tab === 'list') { if (state.detailId) loadDetail(state.detailId); else loadList(); }
+  if (state.tab === 'renfrew') loadMap();
+  if (state.tab === 'log') loadLog();
+}
+
+// ---------------- 進貨表清單 ----------------
+function progressBar(steps) {
+  const cls = (k, now) => (steps[k] ? 'done' : now.includes(k) ? 'now' : '');
+  const now = nextOf(steps);
+  return `<div class="progress" title="1 匯入 · 2 數量確認 · 上排：3 入庫存 → 4a 上架系統 · 下排：4b Renfrew 清點 · 5 上架店內">
+    <div class="seg done"></div><div class="seg ${cls('2', now)}"></div>
+    <div class="branch"><div><span class="${cls('3', now)}"></span><span class="${cls('4a', now)}"></span></div>
+      <div><span class="${cls('4b', now)}"></span></div></div>
+    <div class="seg ${cls('5', now)}"></div></div>`;
+}
+// 流程：1 → 2 → [3 → 4a] 與 [4b] 兩條平行支線 → 5
+const PREREQ = { '2': [], '3': ['2'], '4a': ['3'], '4b': ['2'], '5': ['4a', '4b'] };
+const LATER = { '2': ['3', '4b'], '3': ['4a'], '4a': ['5'], '4b': ['5'], '5': [] };
+function nextOf(steps) {
+  return ['2', '3', '4a', '4b', '5'].filter((k) => !steps[k] && PREREQ[k].every((p) => steps[p]));
+}
+function whTag(s) {
+  if (s.whStatus === 'FINALIZED') return '<span class="tag ok">庫存 Finalized</span>';
+  if (s.whStatus === 'MISSING') return '<span class="tag bad">庫存系統已刪除</span>';
+  return s.whStatus ? `<span class="tag">庫存 ${esc(s.whStatus)}</span>` : '';
+}
+
+async function loadList() {
+  const box = $('#shipList');
+  if (!state.shipments.length) box.innerHTML = '<div class="empty"><span class="spin"></span> 載入中…</div>';
+  try {
+    state.shipments = await api('listShipments', { filter: state.filter });
+    renderList();
+  } catch (e) {
+    box.innerHTML = `<div class="empty err">${esc(e.message)}</div>`;
+  }
+}
+function renderList() {
+  const q = $('#listFilter').value.trim().toLowerCase();
+  const rows = state.shipments.filter((s) => !q || (s.supplier + ' ' + s.name).toLowerCase().includes(q));
+  const box = $('#shipList');
+  if (!rows.length) {
+    box.innerHTML = `<div class="empty">${state.filter === 'open' ? '目前沒有進行中的進貨表。' : '沒有資料。'}</div>`;
+    return;
+  }
+  box.innerHTML = rows.map((s) => {
+    const next = s.nextSteps.map((k) => `${k} ${STEP_LABELS[k]}`).join('、');
+    return `<div class="card ship ${s.done ? 'done' : ''}" data-id="${esc(s.shipmentId)}" tabindex="0">
+      <div class="row"><span class="sup">${esc(s.supplier || '（無供應商）')}</span><span class="grow"></span>${whTag(s)}</div>
+      <div class="row"><span class="num">${esc(s.name)}</span><span class="grow"></span><span class="small muted">建立 ${fmtDate(s.createdAt)}</span></div>
+      ${progressBar(s.steps)}
+      <div class="row next">
+        ${s.done ? `<span class="tag ok">已完成 ${fmtDate(s.steps['5'].at)}</span>` : `<span>下一步：<b>${esc(next)}</b></span>`}
+        <span class="grow"></span>
+        <span class="small muted">${s.lineCount} 項 · 收貨 ${s.receivedUnits}/${s.expectedUnits}${s.renfrewUnits ? ` · Renfrew ${s.renfrewUnits}` : ''}</span>
+      </div></div>`;
+  }).join('');
+}
+$('#shipList').addEventListener('click', (e) => { const c = e.target.closest('.ship'); if (c) openDetail(c.dataset.id); });
+$('#shipList').addEventListener('keydown', (e) => { const c = e.target.closest('.ship'); if (c && e.key === 'Enter') openDetail(c.dataset.id); });
+$('#listFilter').addEventListener('input', renderList);
+$('#refreshList').onclick = () => loadList();
+$$('#filterChips .chip').forEach((b) => (b.onclick = () => {
+  state.filter = b.dataset.filter;
+  $$('#filterChips .chip').forEach((x) => x.classList.toggle('active', x === b));
+  state.shipments = [];
+  loadList();
+}));
+
+// ---------------- 進貨表明細 ----------------
+function openDetail(id, upc) {
+  state.detailId = id;
+  state.highlightUpc = upc || '';
+  if (state.tab !== 'list') setTab('list'); else loadDetail(id);
+  window.scrollTo(0, 0);
+}
+function closeDetail() {
+  state.detailId = ''; state.detail = null;
+  $('#detailView').classList.add('hidden');
+  $('#listView').classList.remove('hidden');
+  loadList();
+}
+async function loadDetail(id) {
+  $('#listView').classList.add('hidden');
+  const view = $('#detailView');
+  view.classList.remove('hidden');
+  if (!state.detail || state.detail.shipment.shipmentId !== id) view.innerHTML = '<div class="empty"><span class="spin"></span> 載入中…</div>';
+  try {
+    state.detail = await api('getShipment', { shipmentId: id });
+    renderDetail();
+  } catch (e) {
+    view.innerHTML = `<button class="btn" type="button" onclick="closeDetail()">← 返回</button><div class="empty err">${esc(e.message)}</div>`;
+  }
+}
+
+function stepCard(s, k) {
+  const done = s.steps[k];
+  const now = s.nextSteps.includes(k);
+  let action = '';
+  if (now) {
+    const labels = { '2': '數量已確認', '3': '🔒 主管1 確認入庫存', '4a': '🔒 主管2 上架系統', '4b': '開始清點', '5': '上架店內' };
+    action = `<button class="btn ${k === '5' ? 'ok' : 'primary'} small" type="button" data-step="${k}">${labels[k]}</button>`;
+  }
+  const undo = done && k !== '1' && canUndo(s, k) ? ` · <button class="link" type="button" data-undo="${k}">撤銷</button>` : '';
+  return `<div class="step ${done ? 'done' : now ? 'now' : ''}">
+    <div class="t"><span class="n">${k}</span>${STEP_LABELS[k]}</div>
+    <div class="who">${done ? `${esc(done.by || STEP_WHO[k])} · ${fmtTime(done.at)}${undo}` : STEP_WHO[k]}</div>
+    ${k === '4b' && s.s4bNote ? `<div class="small">備註：${esc(s.s4bNote)}</div>` : ''}
+    ${k === '5' && s.s5Note ? `<div class="small">備註：${esc(s.s5Note)}</div>` : ''}
+    ${action}</div>`;
+}
+function canUndo(s, k) {
+  return LATER[k] && !LATER[k].some((x) => s.steps[x]);
+}
+
+function allocCell(main, sub) {
+  return `<td class="num"><div class="alloc ${main ? '' : 'zero'}">${main}</div>${sub ? `<div class="alloc-sub">${sub}</div>` : ''}</td>`;
+}
+
+function renderDetail() {
+  const d = state.detail; const s = d.shipment;
+  // 尚未分配（點貨中）時不顯示「已分配 0」
+  const diff = (a, p, label) => (a !== p && (a > 0 || s.whStatus === 'FINALIZED') ? `${label} ${a}` : '');
+  const cells = (l) => [
+    allocCell(l.expectedQty, `${l.receivedQty}`),
+    allocCell(l.po.plan, [diff(l.po.allocated, l.po.plan, '已分配'), esc(l.po.orders)].filter(Boolean).join('<br>')),
+    allocCell(l.marine.plan, diff(l.marine.allocated, l.marine.plan, '已上架')),
+    allocCell(l.renfrew.plan, diff(l.renfrew.allocated, l.renfrew.plan, '已分配'))
+  ];
+  const hl = state.highlightUpc;
+  const totals = d.lines.reduce((t, l) => {
+    t.exp += l.expectedQty; t.rec += l.receivedQty; t.po += l.po.plan; t.ma += l.marine.plan; t.re += l.renfrew.plan; return t;
+  }, { exp: 0, rec: 0, po: 0, ma: 0, re: 0 });
+  const pendingStock = d.stock.filter((x) => x.locationCode === 'PENDING');
+  const unput = d.checks.reduce((n, c) => n + c.countedQty - c.putQty, 0);
+
+  $('#detailView').innerHTML = `
+    <div class="row" style="margin-bottom:10px">
+      <button class="btn" type="button" id="backBtn">← 返回清單</button>
+      <span class="grow"></span>
+      <button class="btn" type="button" id="reloadDetail">重新整理</button>
+    </div>
+    <div class="card">
+      <div class="detail-head">
+        <div class="grow">
+          <div class="muted small">供應商</div>
+          <h2>${esc(s.supplier || '（無供應商）')}</h2>
+          <div class="mono" style="margin-top:2px">${esc(s.name)}</div>
+        </div>
+        <div class="right">
+          <div class="small muted">建立日期</div><div>${fmtDate(s.createdAt)}</div>
+          <div style="margin-top:4px">${whTag(s)} ${s.done ? '<span class="tag ok">已完成</span>' : ''}</div>
+        </div>
+      </div>
+      <div class="stepper">
+        ${stepCard(s, '1')}${stepCard(s, '2')}
+        <div class="branch">${stepCard(s, '3')}${stepCard(s, '4a')}${stepCard(s, '4b')}</div>
+        ${stepCard(s, '5')}
+      </div>
+    </div>
+
+    ${d.checks.length || d.stock.length ? `
+    <div class="section-title">Renfrew 歸架狀況
+      ${unput > 0 ? `<span class="tag warn">未歸架 ${unput}</span><button class="btn small warn" type="button" id="goPutaway">去歸架</button>` : ''}
+      ${pendingStock.length ? `<span class="tag pending">Pending ${pendingStock.reduce((n, x) => n + x.qty, 0)}</span>` : ''}
+    </div>
+    <div class="table-wrap"><table class="grid">
+      <thead><tr><th>商品</th><th>UPC</th><th class="num">應到</th><th class="num">清點</th><th class="num">已歸架</th><th>目前位置</th></tr></thead>
+      <tbody>${d.checks.map((c) => {
+        const locs = d.stock.filter((x) => upcEq(x.upc, c.upc));
+        return `<tr class="${hl && upcEq(c.upc, hl) ? 'hit' : ''}"><td>${esc(c.productName)}</td><td class="mono">${esc(c.upc)}</td>
+          <td class="num">${c.expectedQty}</td><td class="num">${c.countedQty !== c.expectedQty ? `<span class="tag bad">${c.countedQty}</span>` : c.countedQty}</td>
+          <td class="num">${c.putQty}</td>
+          <td>${locs.map((x) => `<span class="tag ${x.locationCode === 'PENDING' ? 'pending' : ''}">${esc(x.locationCode)} × ${x.qty}</span>`).join(' ') || '<span class="muted small">—</span>'}</td></tr>`;
+      }).join('')}</tbody></table></div>` : ''}
+
+    <div class="section-title">商品明細 <span class="small muted">${d.lines.length} 項</span>
+      <span class="grow"></span>
+      <input class="inp" id="lineFilter" placeholder="篩選品名 / UPC" style="max-width:240px" value="${esc(hl)}" />
+    </div>
+    <div class="list show-sm" id="lineCards" style="flex-direction:column">${d.lines.map((l) => `
+      <div class="item line-card ${hl && upcEq(l.upc, hl) ? 'hit' : ''}" data-q="${esc((l.productName + ' ' + l.upc).toLowerCase())}">
+        <div><b>${esc(l.productName)}</b>${l.ngQty ? ` <span class="tag bad">NG ${l.ngQty}</span>` : ''}<div class="mono muted">${esc(l.upc)}</div></div>
+        <table class="qgrid" style="width:100%"><tr><td class="h">數量/已收</td><td class="h">PO</td><td class="h">MARINE</td><td class="h">RENFREW</td></tr>
+          <tr>${cells(l).join('')}</tr></table>
+      </div>`).join('')}</div>
+    <div class="table-wrap hide-sm"><table class="grid" id="lineTable">
+      <thead><tr><th>商品名</th><th>UPC</th><th class="num">數量<div class="alloc-sub">已收</div></th>
+        <th class="num">PO</th><th class="num">MARINE</th><th class="num">RENFREW</th></tr></thead>
+      <tbody>${d.lines.map((l) => `
+        <tr data-q="${esc((l.productName + ' ' + l.upc).toLowerCase())}" class="${hl && upcEq(l.upc, hl) ? 'hit' : ''}">
+          <td>${esc(l.productName)}${l.ngQty ? ` <span class="tag bad">NG ${l.ngQty}</span>` : ''}</td>
+          <td class="mono nowrap">${esc(l.upc)}</td>
+          ${cells(l).join('')}
+        </tr>`).join('') || '<tr><td colspan="6" class="empty">庫存系統中沒有這張點貨單的商品。</td></tr>'}
+      </tbody>
+      <tfoot><tr><th colspan="2">合計</th><th class="num">${totals.exp}<div class="alloc-sub">${totals.rec}</div></th><th class="num">${totals.po}</th><th class="num">${totals.ma}</th><th class="num">${totals.re}</th></tr></tfoot>
+    </table></div>
+    <div class="small muted" style="margin-top:6px">大字＝計畫數量（來自庫存系統）；小字＝實際分配不同時顯示。PO 欄下方為已分配的訂單號碼。</div>
+
+    <div class="section-title">步驟紀錄</div>
+    <div class="card small">${d.events.length ? d.events.map((e) => `<div>${fmtTime(e.at)} · <b>${esc(e.by)}</b> ·
+      ${e.action === 'UNDO' ? '<span class="tag bad">撤銷</span>' : e.action === 'DONE_FORCED' ? '<span class="tag warn">完成（略過提醒）</span>' : '<span class="tag ok">完成</span>'}
+      ${esc(e.step)} ${esc(STEP_LABELS[e.step] || '')}${e.note ? ' · ' + esc(e.note) : ''}</div>`).join('') : '<span class="muted">尚無紀錄</span>'}</div>`;
+
+  $('#backBtn').onclick = closeDetail;
+  $('#reloadDetail').onclick = () => loadDetail(s.shipmentId);
+  const gp = $('#goPutaway'); if (gp) gp.onclick = () => openPutaway(s.shipmentId);
+  const lf = $('#lineFilter');
+  const applyFilter = () => {
+    const q = lf.value.trim().toLowerCase();
+    $$('#lineTable tbody tr[data-q], #lineCards [data-q]').forEach((tr) => tr.classList.toggle('hidden', !!q && !tr.dataset.q.includes(q.replace(/^0+/, ''))));
+  };
+  lf.oninput = applyFilter;
+  if (hl) applyFilter();
+  $$('#detailView [data-step]').forEach((b) => (b.onclick = () => doStep(b.dataset.step)));
+  $$('#detailView [data-undo]').forEach((b) => (b.onclick = () => undoStep(b.dataset.undo)));
+}
+
+async function doStep(step) {
+  const s = state.detail.shipment;
+  const id = s.shipmentId;
+  try {
+    if (step === '2') {
+      if (!confirm(`確認「${s.supplier} ${s.name}」的數量已點好？`)) return;
+      state.detail = await api('completeStep', { shipmentId: id, step });
+    } else if (step === '3' || step === '4a') {
+      const pw = await askPassword(step === '3' ? '主管1：確認入庫存' : '主管2：上架系統', `${s.supplier} · ${s.name}`);
+      if (pw == null) return;
+      state.detail = await apiConfirm('completeStep', { shipmentId: id, step, password: pw });
+    } else if (step === '4b') {
+      return openCount();
+    } else if (step === '5') {
+      return openStep5();
+    }
+    toast(`步驟 ${step}「${STEP_LABELS[step]}」完成`, 'ok');
+    renderDetail();
+  } catch (e) { toast(e.message, 'bad'); }
+}
+
+async function undoStep(step) {
+  const s = state.detail.shipment;
+  const pw = await askPassword(`撤銷步驟 ${step}「${STEP_LABELS[step]}」`, '需要主管密碼');
+  if (pw == null) return;
+  const note = prompt('撤銷原因（選填）') || '';
+  try {
+    state.detail = await api('undoStep', { shipmentId: s.shipmentId, step, password: pw, note });
+    toast('已撤銷', 'ok');
+    renderDetail();
+  } catch (e) { toast(e.message, 'bad'); }
+}
+
+// ----- 步驟 4b：Renfrew 清點 -----
+function openCount() {
+  const d = state.detail; const s = d.shipment;
+  const lines = d.lines.filter((l) => l.renfrewQty > 0);
+  const counts = {};
+  lines.forEach((l) => (counts[l.lineId] = ''));
+  const body = document.createElement('div');
+  body.className = 'list';
+  body.innerHTML = lines.length ? `
+    <div class="small muted">掃描商品條碼，每掃一次 +1；也可以直接輸入數量。</div>
+    <form class="scanbox" id="countScan"><input class="inp" inputmode="numeric" autocomplete="off" placeholder="掃描 UPC" />
+      <button class="btn scan-btn" type="button" data-continuous="1">📷</button></form>
+    <div class="row"><button class="btn small" type="button" id="allMatch">全部符合應到數量</button><span class="grow"></span><span class="small" id="countSummary"></span></div>
+    <div class="list" id="countList">${lines.map((l) => `
+      <div class="item" data-line="${esc(l.lineId)}">
+        <div class="nm"><b>${esc(l.productName)}</b><span class="mono muted">${esc(l.upc)}</span></div>
+        <div class="small">應到 <b>${l.renfrewQty}</b></div>
+        <input class="inp qty" type="number" min="0" inputmode="numeric" placeholder="清點" />
+      </div>`).join('')}</div>
+    <label class="f">備註（數量不符時必填）<textarea class="inp" id="countNote" rows="2"></textarea></label>`
+    : '<div class="note-box">這張進貨表沒有分配到 Renfrew 的商品。確認後即完成步驟 4b。</div><label class="f">備註（選填）<textarea class="inp" id="countNote" rows="2"></textarea></label>';
+  const m = modal({ title: `4b Renfrew 清點 · ${s.supplier} ${s.name}`, body,
+    foot: '<button class="btn" type="button" data-a="cancel">取消</button><button class="btn primary" type="button" data-a="ok">清點無誤，完成 4b</button>' });
+  const summary = () => {
+    const el = $('#countSummary', body); if (!el) return;
+    let ok = 0, bad = 0, empty = 0;
+    lines.forEach((l) => { const v = counts[l.lineId]; if (v === '') empty++; else if (Number(v) === l.renfrewQty) ok++; else bad++; });
+    el.innerHTML = `<span class="tag ok">符合 ${ok}</span> <span class="tag bad">不符 ${bad}</span> <span class="tag">未點 ${empty}</span>`;
+    $$('#countList .item', body).forEach((it) => {
+      const l = lines.find((x) => x.lineId === it.dataset.line); const v = counts[l.lineId];
+      it.style.borderColor = v === '' ? '' : Number(v) === l.renfrewQty ? '#7cc995' : '#f0a0a0';
+    });
+  };
+  $$('#countList .item', body).forEach((it) => {
+    const input = $('input', it);
+    input.oninput = () => { counts[it.dataset.line] = input.value === '' ? '' : String(Math.max(0, parseInt(input.value, 10) || 0)); summary(); };
+  });
+  const bump = (code) => {
+    const matches = lines.filter((l) => upcEq(l.upc, code));
+    if (!matches.length) { beep(false); toast(`這個 UPC 不在 Renfrew 清單：${code}`, 'bad'); return false; }
+    // 同 UPC 多行時先填滿第一行
+    const l = matches.find((x) => (Number(counts[x.lineId]) || 0) < x.renfrewQty) || matches[matches.length - 1];
+    counts[l.lineId] = String((Number(counts[l.lineId]) || 0) + 1);
+    const it = $(`#countList .item[data-line="${CSS.escape(l.lineId)}"]`, body);
+    $('input', it).value = counts[l.lineId];
+    it.classList.remove('flash'); void it.offsetWidth; it.classList.add('flash');
+    it.scrollIntoView({ block: 'nearest' });
+    beep(true); summary();
+    return true;
+  };
+  const scanForm = $('#countScan', body);
+  if (scanForm) {
+    const input = $('input', scanForm);
+    scanForm.onsubmit = (e) => { e.preventDefault(); const v = input.value.trim(); input.value = ''; if (v) bump(v); };
+    $('.scan-btn', scanForm).onclick = () => openScanner((code) => bump(code), { continuous: true });
+    $('#allMatch', body).onclick = () => { lines.forEach((l) => { counts[l.lineId] = String(l.renfrewQty); $(`#countList .item[data-line="${CSS.escape(l.lineId)}"] input`, body).value = l.renfrewQty; }); summary(); };
+    summary();
+    setTimeout(() => input.focus(), 30);
+  }
+  $('[data-a=cancel]', m.foot).onclick = m.close;
+  $('[data-a=ok]', m.foot).onclick = async (e) => {
+    const missing = lines.filter((l) => counts[l.lineId] === '');
+    if (missing.length) { toast(`還有 ${missing.length} 項沒有填清點數量`, 'bad'); return; }
+    e.target.disabled = true;
+    try {
+      state.detail = await api('completeStep', {
+        shipmentId: s.shipmentId, step: '4b', note: $('#countNote', body).value,
+        counts: lines.map((l) => ({ lineId: l.lineId, counted: Number(counts[l.lineId]) }))
+      });
+      m.close();
+      renderDetail();
+      const unput = state.detail.checks.reduce((n, c) => n + c.countedQty - c.putQty, 0);
+      toast('4b 清點完成' + (unput ? '，請接著歸架' : ''), 'ok');
+      if (unput) openPutaway(s.shipmentId);
+    } catch (err) { toast(err.message, 'bad'); e.target.disabled = false; }
+  };
+}
+
+// ----- 步驟 5：掃描 Pending 上架店內 -----
+function openStep5() {
+  const s = state.detail.shipment;
+  const body = document.createElement('div');
+  body.className = 'list';
+  const m = modal({ title: `5 上架店內 · ${s.supplier} ${s.name}`, body,
+    foot: '<button class="btn" type="button" data-a="cancel">關閉</button><button class="btn ok" type="button" data-a="ok">完成步驟 5（隱藏進貨表）</button>',
+    onClose: () => { if (state.detailId === s.shipmentId) loadDetail(s.shipmentId); } });
+  const render = () => {
+    const d = state.detail;
+    const pending = d.stock.filter((x) => x.locationCode === 'PENDING');
+    const unput = d.checks.filter((c) => c.countedQty > c.putQty);
+    body.innerHTML = `
+      <div class="small muted">掃描 Pending 裡的商品，每掃一次＝一件上架店內。</div>
+      <form class="scanbox" id="s5Scan"><input class="inp" inputmode="numeric" autocomplete="off" placeholder="掃描 UPC" />
+        <button class="btn scan-btn" type="button">📷</button></form>
+      ${unput.length ? `<div class="note-box">還有 ${unput.reduce((n, c) => n + c.countedQty - c.putQty, 0)} 件尚未歸架：${unput.map((c) => esc(c.productName)).join('、')}</div>` : ''}
+      <div class="section-title" style="margin:4px 0 0">這張進貨表在 Pending 的商品</div>
+      <div class="list">${pending.map((x) => `<div class="item"><div class="nm"><b>${esc(x.productName)}</b><span class="mono muted">${esc(x.upc)}</span></div><span class="tag pending">Pending × ${x.qty}</span></div>`).join('')
+        || '<div class="empty" style="padding:12px">✅ Pending 已清空</div>'}</div>
+      ${d.stock.filter((x) => x.locationCode !== 'PENDING').length ? `<div class="small muted">其他位置：${d.stock.filter((x) => x.locationCode !== 'PENDING').map((x) => `${esc(x.productName)}（${esc(x.locationCode)} × ${x.qty}）`).join('、')}</div>` : ''}`;
+    const form = $('#s5Scan', body); const input = $('input', form);
+    form.onsubmit = (e) => { e.preventDefault(); const v = input.value.trim(); input.value = ''; if (v) scan(v); };
+    $('.scan-btn', form).onclick = () => openScanner((code) => scan(code), { continuous: true });
+    setTimeout(() => input.focus(), 30);
+  };
+  const scan = async (code) => {
+    try {
+      const r = await api('renfrewScanOut', { upc: code, qty: 1, shipmentId: s.shipmentId });
+      beep(true);
+      const other = r.taken.find((t) => t.shipmentId !== s.shipmentId);
+      toast(`✔ ${r.productName} 上架店內${other ? `（屬於 ${shipLabel(other.shipment)}）` : ''}`, 'ok');
+      r.warnings.forEach((w) => toast('注意：' + w, 'bad'));
+      state.detail = await api('getShipment', { shipmentId: s.shipmentId });
+      render();
+    } catch (e) { beep(false); toast(e.message, 'bad'); }
+  };
+  $('[data-a=cancel]', m.foot).onclick = m.close;
+  $('[data-a=ok]', m.foot).onclick = async () => {
+    const note = state.detail.stock.some((x) => x.locationCode === 'PENDING') ? (prompt('備註（選填）') || '') : '';
+    try {
+      await apiConfirm('completeStep', { shipmentId: s.shipmentId, step: '5', note });
+      toast('步驟 5 完成，這張進貨表已隱藏', 'ok');
+      closeDetail();
+      m.close();
+    } catch (e) { toast(e.message, 'bad'); }
+  };
+  render();
+}
+
+// ---------------- 掃描查詢 ----------------
+$('#searchForm').onsubmit = (e) => { e.preventDefault(); runSearch($('#searchInput').value.trim()); };
+async function runSearch(upc) {
+  if (!upc) return;
+  const box = $('#searchResult');
+  box.innerHTML = '<div class="empty"><span class="spin"></span> 查詢中…</div>';
+  try {
+    const r = await api('searchUpc', { upc });
+    $('#searchInput').select();
+    const open = r.shipments.filter((s) => !s.done);
+    const done = r.shipments.filter((s) => s.done);
+    const card = (s) => `<div class="card ship ${s.done ? 'done' : ''}" data-id="${esc(s.shipmentId)}" tabindex="0">
+      <div class="row"><span class="sup">${esc(s.supplier)}</span><span class="num">${esc(s.name)}</span><span class="grow"></span>${whTag(s)}</div>
+      <div class="small muted">建立 ${fmtDate(s.createdAt)}</div>
+      ${progressBar(s.steps)}
+      <div class="row small">${s.done ? '<span class="tag ok">已完成</span>' : `下一步：<b>${s.nextSteps.map((k) => `${k} ${STEP_LABELS[k]}`).join('、')}</b>`}</div>
+      <div class="row small">數量 <b>${s.line.expectedQty}</b>（已收 ${s.line.receivedQty}）· PO <b>${s.line.poQty}</b> · MARINE <b>${s.line.marineQty}</b> · RENFREW <b>${s.line.renfrewQty}</b></div>
+    </div>`;
+    box.innerHTML = `
+      <div class="section-title">${esc(r.productName || '（找不到商品名稱）')} <span class="mono muted">${esc(r.upc)}</span></div>
+      ${r.toPutaway.length ? `<div class="note-box" style="margin-bottom:8px">Renfrew 待歸架：${r.toPutaway.map((t) => `${esc(shipLabel(t.shipment))} × ${t.remaining}`).join('、')}</div>` : ''}
+      ${r.stock.length ? `<div class="card" style="margin-bottom:10px"><b>Renfrew 倉庫位置</b><div class="row" style="margin-top:6px">${r.stock.map((x) =>
+        `<span class="tag ${x.locationCode === 'PENDING' ? 'pending' : ''}" style="font-size:14px">${esc(x.locationCode)} × ${x.qty}${x.shipment ? ` · ${esc(x.shipment.name)}` : ''}</span>`).join('')}</div></div>` : ''}
+      ${open.length ? `<div class="section-title">未完成的進貨表（${open.length}）</div><div class="ship-list">${open.map(card).join('')}</div>` : ''}
+      ${done.length ? `<div class="section-title">已完成（${done.length}）</div><div class="ship-list">${done.map(card).join('')}</div>` : ''}
+      ${!r.shipments.length ? '<div class="empty">追蹤中的進貨表裡沒有這個 UPC。</div>' : ''}`;
+    $$('.ship', box).forEach((c) => (c.onclick = () => openDetail(c.dataset.id, r.upc)));
+  } catch (e) { box.innerHTML = `<div class="empty err">${esc(e.message)}</div>`; }
+}
+
+// ---------------- Renfrew 倉庫 ----------------
+function allCells() { return state.map ? state.map.racks.flatMap((r) => r.cells) : []; }
+function locationOptions(selected) {
+  return allCells().map((c) => `<option value="${esc(c.code)}" ${c.code === selected ? 'selected' : ''}>${esc(c.code)}${c.code === 'PENDING' ? '（暫置）' : ''}</option>`).join('');
+}
+async function ensureMap() { if (!state.map) state.map = await api('renfrewMap'); return state.map; }
+
+async function loadMap() {
+  try {
+    state.map = await api('renfrewMap');
+    renderMap();
+  } catch (e) { $('#racks').innerHTML = `<div class="empty err">${esc(e.message)}</div>`; }
+}
+function renderPutBadge() {
+  const n = state.map ? state.map.toPutaway.reduce((t, x) => t + x.remaining, 0) : 0;
+  $('#putBadge').textContent = n; $('#putBadge').classList.toggle('hidden', !n);
+  $('#putCount').textContent = n ? `(${n})` : '';
+}
+function renderMap() {
+  renderPutBadge();
+  $('#racks').innerHTML = state.map.racks.map((r) => {
+    const total = r.cells.reduce((n, c) => n + c.totalQty, 0);
+    return `<div class="rack ${r.rack === 'PENDING' ? 'pending' : ''}">
+      <h3>${r.rack === 'PENDING' ? 'Pending' : esc(r.rack) + ' 架'}<span class="small muted">${total} 件</span></h3>
+      <div class="cells">${r.cells.map((c) => `<div class="cell ${c.totalQty ? 'has' : ''} ${state.findCodes.has(c.code) ? 'hit' : ''} ${state.selectedCell === c.code ? 'sel' : ''}" data-code="${esc(c.code)}">
+        <div class="c">${esc(c.code)}</div><div class="q">${c.items.length} 種 · ${c.totalQty} 件</div></div>`).join('')}</div></div>`;
+  }).join('');
+  $$('#racks .cell').forEach((el) => (el.onclick = () => { state.selectedCell = state.selectedCell === el.dataset.code ? '' : el.dataset.code; renderMap(); }));
+  renderCellPanel();
+}
+function renderCellPanel() {
+  const cell = allCells().find((c) => c.code === state.selectedCell);
+  const box = $('#cellPanel');
+  if (!cell) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="section-title">${esc(cell.code)} <span class="small muted">${cell.items.length} 種 · ${cell.totalQty} 件</span>
+      <span class="grow"></span><button class="btn small" type="button" id="closeCell">關閉</button></div>
+    <div class="list">${cell.items.map((x) => `<div class="item ${state.findUpc && upcEq(x.upc, state.findUpc) ? 'flash' : ''}">
+      <div class="nm"><b>${esc(x.productName || '（無品名）')}</b><span class="mono muted">${esc(x.upc)}</span>
+        <div class="small muted">${x.shipment ? esc(shipLabel(x.shipment)) : '手動加入'} · ${fmtTime(x.updatedAt)}</div></div>
+      <b style="font-size:18px">× ${x.qty}</b>
+      <button class="btn small" type="button" data-move="${esc(x.id)}">移動</button>
+      <button class="btn small" type="button" data-remove="${esc(x.id)}">移出</button>
+    </div>`).join('') || '<div class="empty">這個位置是空的。</div>'}</div>`;
+  $('#closeCell').onclick = () => { state.selectedCell = ''; renderMap(); };
+  $$('[data-move]', box).forEach((b) => (b.onclick = () => openMove(cell.items.find((x) => x.id === b.dataset.move))));
+  $$('[data-remove]', box).forEach((b) => (b.onclick = () => openRemove(cell.items.find((x) => x.id === b.dataset.remove))));
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function openMove(item) {
+  const m = modal({ title: '移動商品', narrow: true,
+    body: `<div><b>${esc(item.productName)}</b><div class="mono muted">${esc(item.upc)} · 目前 ${esc(item.locationCode)} × ${item.qty}</div></div>
+      <label class="f">移到<select class="inp" id="mvTo">${locationOptions(item.locationCode === 'PENDING' ? 'N' : 'PENDING')}</select></label>
+      <label class="f">數量<input class="inp qty" id="mvQty" type="number" min="1" max="${item.qty}" value="${item.qty}" /></label>`,
+    foot: '<button class="btn" type="button" data-a="cancel">取消</button><button class="btn primary" type="button" data-a="ok">移動</button>' });
+  $('[data-a=cancel]', m.foot).onclick = m.close;
+  $('[data-a=ok]', m.foot).onclick = async () => {
+    try {
+      state.map = await api('renfrewMove', { stockId: item.id, toCode: $('#mvTo', m.body).value, qty: Number($('#mvQty', m.body).value) });
+      m.close(); toast('已移動', 'ok'); renderMap();
+    } catch (e) { toast(e.message, 'bad'); }
+  };
+}
+function openRemove(item) {
+  const m = modal({ title: '移出商品', narrow: true,
+    body: `<div><b>${esc(item.productName)}</b><div class="mono muted">${esc(item.upc)} · ${esc(item.locationCode)} × ${item.qty}</div></div>
+      <label class="f">原因<select class="inp" id="rmReason">${Object.entries(REMOVE_REASONS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>
+      <label class="f">數量<input class="inp qty" id="rmQty" type="number" min="1" max="${item.qty}" value="${item.locationCode === 'PENDING' ? item.qty : 1}" /></label>
+      <label class="f">備註（選填）<input class="inp" id="rmNote" /></label>`,
+    foot: '<button class="btn" type="button" data-a="cancel">取消</button><button class="btn primary" type="button" data-a="ok">移出</button>' });
+  $('[data-a=cancel]', m.foot).onclick = m.close;
+  $('[data-a=ok]', m.foot).onclick = async () => {
+    try {
+      state.map = await api('renfrewRemove', { stockId: item.id, qty: Number($('#rmQty', m.body).value), reason: $('#rmReason', m.body).value, note: $('#rmNote', m.body).value });
+      m.close(); toast('已移出', 'ok'); renderMap();
+    } catch (e) { toast(e.message, 'bad'); }
+  };
+}
+
+// 歸架（可指定只顯示某張進貨表）
+async function openPutaway(onlyShipmentId) {
+  try { state.map = await api('renfrewMap'); } catch (e) { toast(e.message, 'bad'); return; }
+  const body = document.createElement('div');
+  body.className = 'list';
+  const m = modal({ title: '待歸架', body, foot: '<button class="btn" type="button" data-a="close">關閉</button>',
+    onClose: () => { if (state.tab === 'renfrew') renderMap(); if (state.detailId) loadDetail(state.detailId); } });
+  $('[data-a=close]', m.foot).onclick = m.close;
+  let filterShip = onlyShipmentId || '';
+  const render = () => {
+    const rows = state.map.toPutaway.filter((x) => !filterShip || x.shipmentId === filterShip);
+    const groups = {};
+    rows.forEach((x) => (groups[x.shipmentId] = groups[x.shipmentId] || []).push(x));
+    body.innerHTML = `
+      <form class="scanbox" id="putScan"><input class="inp" inputmode="numeric" autocomplete="off" placeholder="掃描 UPC 找商品" />
+        <button class="btn scan-btn" type="button">📷</button></form>
+      ${filterShip ? `<div class="row small"><span>只顯示這張進貨表</span><button class="link" type="button" id="putAll">顯示全部待歸架</button></div>` : ''}
+      ${Object.entries(groups).map(([sid, items]) => `
+        <div class="card" data-group="${esc(sid)}">
+          <div class="row" style="margin-bottom:8px"><b>${esc(shipLabel(items[0].shipment))}</b><span class="grow"></span>
+            <select class="inp" style="width:auto" data-allto>${locationOptions('PENDING')}</select>
+            <button class="btn small warn" type="button" data-putall>全部放到這裡</button></div>
+          <div class="list">${items.map((x) => `<div class="item" data-line="${esc(x.lineId)}" data-upc="${esc(x.upc)}">
+            <div class="nm"><b>${esc(x.productName)}</b><span class="mono muted">${esc(x.upc)}</span></div>
+            <span class="small">未歸架 <b>${x.remaining}</b></span>
+            <select class="inp" style="width:auto" data-loc>${locationOptions('PENDING')}</select>
+            <input class="inp qty" type="number" min="1" max="${x.remaining}" value="${x.remaining}" data-qty />
+            <button class="btn small primary" type="button" data-put>歸架</button></div>`).join('')}</div>
+        </div>`).join('') || '<div class="empty">✅ 沒有待歸架的商品。</div>'}`;
+    const form = $('#putScan', body); const input = $('input', form);
+    const find = (code) => {
+      const it = $$('.item[data-upc]', body).find((el) => upcEq(el.dataset.upc, code));
+      if (!it) { beep(false); toast('待歸架清單裡沒有這個 UPC：' + code, 'bad'); return; }
+      beep(true); it.classList.remove('flash'); void it.offsetWidth; it.classList.add('flash');
+      it.scrollIntoView({ block: 'center' }); $('[data-loc]', it).focus();
+    };
+    form.onsubmit = (e) => { e.preventDefault(); const v = input.value.trim(); input.value = ''; if (v) find(v); };
+    $('.scan-btn', form).onclick = () => openScanner(find);
+    const all = $('#putAll', body); if (all) all.onclick = () => { filterShip = ''; render(); };
+    $$('[data-put]', body).forEach((b) => (b.onclick = async () => {
+      const it = b.closest('.item'); const sid = b.closest('[data-group]').dataset.group;
+      await put([{ shipmentId: sid, lineId: it.dataset.line, locationCode: $('[data-loc]', it).value, qty: Number($('[data-qty]', it).value) }]);
+    }));
+    $$('[data-putall]', body).forEach((b) => (b.onclick = async () => {
+      const g = b.closest('[data-group]'); const to = $('[data-allto]', g).value;
+      const items = $$('.item', g).map((it) => ({ shipmentId: g.dataset.group, lineId: it.dataset.line, locationCode: to, qty: Number($('[data-qty]', it).max) }));
+      if (confirm(`把這張進貨表剩下的 ${items.reduce((n, x) => n + x.qty, 0)} 件全部放到 ${to}？`)) await put(items);
+    }));
+    setTimeout(() => input.focus(), 30);
+  };
+  const put = async (items) => {
+    try {
+      state.map = await api('renfrewPutaway', { items });
+      toast('已歸架', 'ok');
+      renderPutBadge();
+      render();
+    } catch (e) { toast(e.message, 'bad'); }
+  };
+  render();
+}
+$('#btnPutaway').onclick = () => openPutaway('');
+
+// 掃描移出 Pending（不限進貨表）
+$('#btnScanOut').onclick = () => {
+  const body = document.createElement('div');
+  body.className = 'list';
+  body.innerHTML = `<div class="small muted">掃描 Pending 裡的商品，每掃一次＝一件上架店內（優先扣最早放進 Pending 的）。</div>
+    <form class="scanbox" id="soScan"><input class="inp" inputmode="numeric" autocomplete="off" placeholder="掃描 UPC" />
+      <button class="btn scan-btn" type="button">📷</button></form><div class="list" id="soLog"></div>`;
+  const m = modal({ title: '掃描移出 Pending', body, foot: '<button class="btn" type="button" data-a="close">完成</button>', onClose: () => loadMap() });
+  $('[data-a=close]', m.foot).onclick = m.close;
+  const form = $('#soScan', body); const input = $('input', form);
+  const scan = async (code) => {
+    try {
+      const r = await api('renfrewScanOut', { upc: code, qty: 1 });
+      beep(true);
+      const t = r.taken[0];
+      $('#soLog', body).insertAdjacentHTML('afterbegin', `<div class="item flash"><div class="nm"><b>✔ ${esc(r.productName)}</b>
+        <span class="small muted">${esc(shipLabel(t.shipment))} · Pending 剩 ${r.remainingForUpc}</span></div></div>`);
+      r.warnings.forEach((w) => toast('注意：' + w, 'bad'));
+    } catch (e) {
+      beep(false);
+      $('#soLog', body).insertAdjacentHTML('afterbegin', `<div class="item"><div class="nm err">✖ ${esc(code)}：${esc(e.message)}</div></div>`);
+    }
+  };
+  form.onsubmit = (e) => { e.preventDefault(); const v = input.value.trim(); input.value = ''; if (v) scan(v); };
+  $('.scan-btn', form).onclick = () => openScanner(scan, { continuous: true });
+  setTimeout(() => input.focus(), 30);
+};
+
+// 手動加入商品
+$('#btnAddStock').onclick = async () => {
+  try { await ensureMap(); } catch (e) { toast(e.message, 'bad'); return; }
+  const m = modal({ title: '手動加入商品', narrow: true,
+    body: `<div class="small muted">用於不屬於任何進貨表的商品（例如盤點補登）。</div>
+      <form class="scanbox" id="addScan"><input class="inp" id="addUpc" inputmode="numeric" autocomplete="off" placeholder="UPC" />
+        <button class="btn scan-btn" type="button">📷</button></form>
+      <label class="f">商品名稱<input class="inp" id="addName" placeholder="掃描後自動帶入" /></label>
+      <label class="f">位置<select class="inp" id="addLoc">${locationOptions(state.selectedCell || 'N')}</select></label>
+      <label class="f">數量<input class="inp qty" id="addQty" type="number" min="1" value="1" /></label>`,
+    foot: '<button class="btn" type="button" data-a="cancel">取消</button><button class="btn primary" type="button" data-a="ok">加入</button>' });
+  const upcInput = $('#addUpc', m.body);
+  const lookup = async () => {
+    const v = upcInput.value.trim(); if (!v) return;
+    try { const r = await api('lookupUpc', { upc: v }); if (r.productName) $('#addName', m.body).value = r.productName; } catch (e) { /* 忽略 */ }
+  };
+  $('#addScan', m.body).onsubmit = (e) => { e.preventDefault(); lookup(); $('#addQty', m.body).focus(); };
+  upcInput.onchange = lookup;
+  $('.scan-btn', m.body).onclick = () => openScanner((code) => { upcInput.value = code; lookup(); });
+  $('[data-a=cancel]', m.foot).onclick = m.close;
+  $('[data-a=ok]', m.foot).onclick = async () => {
+    try {
+      state.map = await api('renfrewAdd', { upc: upcInput.value, productName: $('#addName', m.body).value, locationCode: $('#addLoc', m.body).value, qty: Number($('#addQty', m.body).value) });
+      m.close(); toast('已加入', 'ok'); if (state.tab === 'renfrew') renderMap();
+    } catch (e) { toast(e.message, 'bad'); }
+  };
+  setTimeout(() => upcInput.focus(), 30);
+};
+
+// 管理格位
+$('#btnLocations').onclick = async () => {
+  try { await ensureMap(); } catch (e) { toast(e.message, 'bad'); return; }
+  const racks = state.map.racks.map((r) => r.rack);
+  const m = modal({ title: '管理格位', narrow: true,
+    body: `<div class="small muted">在貨架下新增格位（例如 N-1、N-2），或新增一個新的貨架（貨架名稱＝格位代碼）。需要主管密碼。</div>
+      <label class="f">貨架<input class="inp" id="locRack" list="rackList" placeholder="例如 N" /></label>
+      <datalist id="rackList">${racks.map((r) => `<option value="${esc(r)}">`).join('')}</datalist>
+      <label class="f">格位代碼<input class="inp" id="locCode" placeholder="例如 N-1" /></label>
+      <div class="row"><button class="btn primary" type="button" id="locAdd">新增</button><button class="btn danger" type="button" id="locDel">刪除格位（必須是空的）</button></div>`,
+    foot: '<button class="btn" type="button" data-a="close">關閉</button>' });
+  $('[data-a=close]', m.foot).onclick = m.close;
+  $('#locRack', m.body).oninput = (e) => { const c = $('#locCode', m.body); if (!c.dataset.touched) c.value = e.target.value.toUpperCase() + '-'; };
+  $('#locCode', m.body).oninput = (e) => (e.target.dataset.touched = '1');
+  const run = async (fn) => {
+    const code = $('#locCode', m.body).value.trim().replace(/-$/, '');
+    if (!code) { toast('請輸入格位代碼', 'bad'); return; }
+    const pw = await askPassword(fn === 'addLocation' ? '新增格位' : '刪除格位', '需要主管密碼');
+    if (pw == null) return;
+    try {
+      state.map = await api(fn, { code, rack: $('#locRack', m.body).value.trim() || code, password: pw });
+      toast(fn === 'addLocation' ? '已新增 ' + code.toUpperCase() : '已刪除 ' + code.toUpperCase(), 'ok');
+      if (state.tab === 'renfrew') renderMap();
+    } catch (e) { toast(e.message, 'bad'); }
+  };
+  $('#locAdd', m.body).onclick = () => run('addLocation');
+  $('#locDel', m.body).onclick = () => run('removeLocation');
+};
+
+$('#refreshMap').onclick = loadMap;
+$('#mapFindForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const upc = $('#mapFind').value.trim();
+  if (!upc) return;
+  try {
+    const r = await api('searchUpc', { upc });
+    state.findUpc = r.upc;
+    state.findCodes = new Set(r.stock.map((x) => x.locationCode));
+    $('#mapFindResult').innerHTML = `<b>${esc(r.productName || r.upc)}</b>：` + (r.stock.length
+      ? r.stock.map((x) => `<span class="tag ${x.locationCode === 'PENDING' ? 'pending' : ''}">${esc(x.locationCode)} × ${x.qty}</span>`).join(' ')
+      : '<span class="muted">Renfrew 倉庫沒有這個商品</span>') +
+      (r.toPutaway.length ? ` · <span class="tag warn">待歸架 ${r.toPutaway.reduce((n, t) => n + t.remaining, 0)}</span>` : '');
+    if (r.stock.length === 1) state.selectedCell = r.stock[0].locationCode;
+    if (!state.map) state.map = await api('renfrewMap');
+    renderMap();
+    $('#mapFind').select();
+  } catch (err) { toast(err.message, 'bad'); }
+};
+$('#mapFindClear').onclick = () => { state.findUpc = ''; state.findCodes = new Set(); $('#mapFind').value = ''; $('#mapFindResult').innerHTML = ''; if (state.map) renderMap(); };
+
+// ---------------- 異動紀錄 ----------------
+$('#logForm').onsubmit = (e) => { e.preventDefault(); loadLog(); };
+async function loadLog() {
+  const box = $('#logResult');
+  box.innerHTML = '<div class="empty"><span class="spin"></span></div>';
+  try {
+    const rows = await api('renfrewMoves', { upc: $('#logUpc').value.trim(), limit: 200 });
+    box.innerHTML = rows.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>時間</th><th>商品</th><th class="hide-sm">進貨表</th><th>從 → 到</th><th class="num">數量</th><th>原因</th><th>人員</th></tr></thead><tbody>
+      ${rows.map((r) => {
+        const [code, ...rest] = r.reason.split(': ');
+        return `<tr><td class="nowrap small">${fmtTime(r.at)}</td><td>${esc(r.productName)}<div class="mono muted">${esc(r.upc)}</div></td>
+          <td class="hide-sm small">${r.shipment ? esc(shipLabel(r.shipment)) : ''}</td>
+          <td class="nowrap">${esc(r.from === 'ARRIVAL' ? '到貨' : r.from || '—')} → ${esc(r.to === 'STORE' ? '店內' : r.to || '—')}</td>
+          <td class="num">${r.qty}</td><td>${esc(MOVE_REASONS[code] || code)}${rest.length ? `<div class="small muted">${esc(rest.join(': '))}</div>` : ''}</td><td>${esc(r.by)}</td></tr>`;
+      }).join('')}</tbody></table></div>` : '<div class="empty">沒有紀錄。</div>';
+  } catch (e) { box.innerHTML = `<div class="empty err">${esc(e.message)}</div>`; }
+}
+
+// ---------------- 設定 ----------------
+$('#pwForm').onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    await api('setPassword', { key: $('#pwKey').value, value: $('#pwNew').value, adminPassword: $('#pwAdmin').value });
+    if ($('#pwKey').value === 'pw_access') store('trk_code', $('#pwNew').value);
+    $('#pwNew').value = ''; $('#pwAdmin').value = '';
+    toast('密碼已更新', 'ok');
+    loadPwStatus();
+  } catch (err) { toast(err.message, 'bad'); }
+};
+async function loadPwStatus() {
+  try {
+    const r = await api('ping');
+    const names = { pw_access: '員工密碼', pw_step3: '主管1', pw_step4a: '主管2', pw_admin: '管理密碼' };
+    $('#pwStatus').innerHTML = '已設定：' + Object.keys(names).map((k) => `<span class="tag ${r.passwordsSet.includes(k) ? 'ok' : ''}">${names[k]} ${r.passwordsSet.includes(k) ? '✓' : '未設定'}</span>`).join(' ');
+  } catch (e) { /* 登入畫面會處理 */ }
+}
+$('[data-tab=settings]').addEventListener('click', loadPwStatus);
+
+// ---------------- 相機掃描 ----------------
+// Android Chrome 用內建 BarcodeDetector；iPhone Safari 第一次使用時載入 ZXing。
+const ZXING_URL = 'https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js';
+let zxingLoading = null;
+function loadZxing() {
+  if (window.ZXing) return Promise.resolve();
+  if (!zxingLoading) {
+    zxingLoading = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = ZXING_URL; s.onload = resolve; s.onerror = () => { zxingLoading = null; reject(new Error('無法載入掃描元件')); };
+      document.head.appendChild(s);
+    });
+  }
+  return zxingLoading;
+}
+function normalizeCode(code) {
+  code = String(code || '').trim();
+  return /^0\d{12}$/.test(code) ? code.slice(1) : code;  // UPC-A 被讀成 13 碼時轉回 12 碼
+}
+async function openScanner(onCode, { continuous = false } = {}) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast('這個瀏覽器不支援相機（需要 HTTPS）', 'bad'); return; }
+  const wrap = document.createElement('div');
+  wrap.id = 'cam';
+  wrap.innerHTML = `<video playsinline muted></video><div class="frame"></div>
+    <div class="cam-bar"><div class="cam-msg">${continuous ? '連續掃描中…' : '對準條碼'}</div><button class="btn" type="button">關閉</button></div>`;
+  document.body.appendChild(wrap);
+  const video = $('video', wrap); const msg = $('.cam-msg', wrap);
+  let stream = null; let stopped = false; let reader = null; let timer = 0;
+  let last = ''; let lastAt = 0;
+  const stop = () => {
+    stopped = true; clearTimeout(timer);
+    if (reader) try { reader.reset(); } catch (e) { /* ignore */ }
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    wrap.remove();
+  };
+  $('button', wrap).onclick = stop;
+  const got = async (raw) => {
+    const code = normalizeCode(raw);
+    const now = Date.now();
+    if (!code || (code === last && now - lastAt < 1500)) { lastAt = code === last ? now : lastAt; return; }
+    last = code; lastAt = now;
+    if (!continuous) { stop(); onCode(code); return; }
+    msg.textContent = '✔ ' + code;
+    try { await onCode(code); } catch (e) { /* onCode 自己會顯示錯誤 */ }
+  };
+  try {
+    if ('BarcodeDetector' in window) {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      video.srcObject = stream; await video.play();
+      const detector = new window.BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'qr_code'] });
+      const tick = async () => {
+        if (stopped) return;
+        try { const codes = await detector.detect(video); if (codes.length) await got(codes[0].rawValue); } catch (e) { /* 下一格再試 */ }
+        if (!stopped) timer = setTimeout(tick, 120);
+      };
+      tick();
+    } else {
+      msg.textContent = '載入掃描元件…';
+      await loadZxing();
+      if (stopped) return;
+      msg.textContent = continuous ? '連續掃描中…' : '對準條碼';
+      reader = new window.ZXing.BrowserMultiFormatReader();
+      await reader.decodeFromConstraints({ video: { facingMode: 'environment' }, audio: false }, video, (result) => { if (result && !stopped) got(result.getText()); });
+    }
+  } catch (e) {
+    stop();
+    toast('無法開啟相機：' + (e.message || e), 'bad');
+  }
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('.scan-btn[data-scan-for]');
+  if (!b) return;
+  const input = document.getElementById(b.dataset.scanFor);
+  openScanner((code) => { input.value = code; input.form.requestSubmit(); });
+});
+// 只在觸控裝置顯示相機按鈕
+if (!(window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 900)) {
+  const style = document.createElement('style'); style.textContent = '.scan-btn { display: none; }'; document.head.appendChild(style);
+}
+
+// ---------------- 啟動 ----------------
+renderUser();
+if (!store('trk_user')) showLogin('');
+else { loadList(); api('renfrewMap').then((m) => { state.map = m; renderPutBadge(); }).catch(() => {}); }
+setInterval(() => {
+  if (document.hidden || $('.modal-bg') || $('#cam') || !store('trk_user')) return;
+  if (state.tab === 'list' && !state.detailId) loadList();
+  else if (state.tab === 'list' && state.detailId) loadDetail(state.detailId);
+  else if (state.tab === 'renfrew') loadMap();
+}, 60000);
+</script>
+</body>
+</html>
