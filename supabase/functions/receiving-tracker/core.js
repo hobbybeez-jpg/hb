@@ -113,6 +113,20 @@ async function syncShipments(tx) {
   );
 }
 
+// Track a shipment on demand (e.g. Qty Confirmed pressed in the inventory system for an older shipment)
+async function ensureShipment(tx, shipmentId) {
+  const rows = await tx.query('select ignored from trk.shipments where shipment_id = $1', [shipmentId]);
+  if (rows.length) return { ignored: !!rows[0].ignored };
+  if (!(await whExists(tx))) return null;
+  const added = await tx.query(
+    `insert into trk.shipments (shipment_id, supplier, name, created_at)
+     select shipment_id, supplier, name, created_at from wh.shipments where shipment_id = $1
+     on conflict (shipment_id) do nothing returning shipment_id`,
+    [shipmentId]
+  );
+  return added.length ? { ignored: false } : null;
+}
+
 const SHIPMENT_COLUMNS = `
   t.shipment_id, coalesce(s.supplier, t.supplier) as supplier, coalesce(s.name, t.name) as name,
   coalesce(s.created_at, t.created_at) as created_at, s.status as wh_status, s.finalized_at as wh_finalized_at,
@@ -316,6 +330,16 @@ const API = {
     return { ok: true, passwordsSet: rows.map((r) => r.key) };
   },
 
+  // Light status for the inventory system's Qty Confirmed button
+  async getStatus(tx, { shipmentId }) {
+    const id = cleanText(shipmentId, 300);
+    const tracked = await ensureShipment(tx, id);
+    if (!tracked) return { tracked: false, ignored: false };
+    if (tracked.ignored) return { tracked: false, ignored: true };
+    const shipment = shipmentOut(await loadShipmentRow(tx, id));
+    return { tracked: true, ignored: false, steps: shipment.steps, nextSteps: shipment.nextSteps, done: shipment.done };
+  },
+
   async listShipments(tx, { filter = 'open' }) {
     await syncShipments(tx);
     const wh = await whExists(tx);
@@ -376,6 +400,8 @@ const API = {
     step = String(step || '');
     if (!STEP_COL[step]) throw new UserError('Invalid step: ' + step);
     const id = cleanText(shipmentId, 300);
+    const tracked = await ensureShipment(tx, id);
+    if (tracked && tracked.ignored) throw new UserError('This shipment is not tracked by the Receiving Tracker.', 'IGNORED');
     await tx.query('select 1 from trk.shipments where shipment_id = $1 for update', [id]);
     const row = await loadShipmentRow(tx, id);
     const shipment = shipmentOut(row);
