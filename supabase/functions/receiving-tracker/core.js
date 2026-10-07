@@ -140,15 +140,12 @@ function shipmentOut(row) {
   };
 }
 
+// 流程：1 → 2 → [3 → 4a] 與 [4b] 兩條平行支線 → 5
+export const PREREQ = { '2': [], '3': ['2'], '4a': ['3'], '4b': ['2'], '5': ['4a', '4b'] };
+const LATER = { '2': ['3', '4b'], '3': ['4a'], '4a': ['5'], '4b': ['5'], '5': [] };
+
 export function nextSteps(steps) {
-  if (steps['5']) return [];
-  if (!steps['2']) return ['2'];
-  if (!steps['3']) return ['3'];
-  const out = [];
-  if (!steps['4a']) out.push('4a');
-  if (!steps['4b']) out.push('4b');
-  if (!out.length) out.push('5');
-  return out;
+  return STEPS.filter((k) => !steps[k] && PREREQ[k].every((p) => steps[p]));
 }
 
 async function loadShipmentRow(tx, shipmentId) {
@@ -378,9 +375,10 @@ const API = {
     if (shipment.steps[step]) {
       throw new UserError(`步驟 ${step}「${STEP_LABELS[step]}」已經由 ${shipment.steps[step].by} 完成了。`);
     }
-    if (!shipment.nextSteps.includes(step)) {
-      const need = shipment.nextSteps.map((s) => `${s}「${STEP_LABELS[s]}」`).join('、');
-      throw new UserError(`還不能進行步驟 ${step}，請先完成：${need || '前面的步驟'}。`);
+    const missing = PREREQ[step].filter((p) => !shipment.steps[p]);
+    if (missing.length) {
+      const need = missing.map((s) => `${s}「${STEP_LABELS[s]}」`).join('、');
+      throw new UserError(`還不能進行步驟 ${step}，請先完成：${need}。`);
     }
     note = cleanText(note, 500);
 
@@ -449,8 +447,7 @@ const API = {
     await tx.query('select 1 from trk.shipments where shipment_id = $1 for update', [id]);
     const shipment = shipmentOut(await loadShipmentRow(tx, id));
     if (!shipment.steps[step]) throw new UserError(`步驟 ${step} 尚未完成，不需要撤銷。`);
-    const later = { '2': ['3'], '3': ['4a', '4b'], '4a': ['5'], '4b': ['5'], '5': [] }[step];
-    const blocking = later.filter((s) => shipment.steps[s]);
+    const blocking = LATER[step].filter((s) => shipment.steps[s]);
     if (blocking.length) throw new UserError(`請先撤銷後面的步驟：${blocking.join('、')}。`);
     await verifyPassword(tx, await adminKeys(tx), password, '主管');
     if (step === '4b') {

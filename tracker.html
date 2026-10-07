@@ -70,8 +70,10 @@
   .ship.done { opacity: .75; }
   .progress { display: flex; gap: 3px; height: 10px; }
   .progress .seg { flex: 1; background: var(--todo); border-radius: 3px; }
-  .progress .seg.split { display: flex; gap: 2px; background: transparent; }
-  .progress .seg.split span { flex: 1; background: var(--todo); border-radius: 3px; }
+  .progress { height: 14px; }
+  .progress .branch { flex: 2; display: flex; flex-direction: column; gap: 2px; }
+  .progress .branch > div { flex: 1; display: flex; gap: 3px; }
+  .progress .branch span { flex: 1; background: var(--todo); border-radius: 2px; }
   .progress .done { background: var(--ok) !important; }
   .progress .now { background: var(--now) !important; }
   .next { font-size: 13px; }
@@ -79,8 +81,10 @@
   /* Detail */
   .detail-head { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
   .detail-head h2 { margin: 0; font-size: 20px; }
-  .stepper { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 14px; }
-  .stepper .col4 { display: grid; gap: 8px; }
+  .stepper { display: grid; grid-template-columns: 1fr 1fr 2fr 1fr; gap: 8px; margin-top: 14px; }
+  .stepper .branch { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stepper .branch .step:last-child { grid-column: span 2; min-height: 0; }
+  .lane { font-size: 11px; color: var(--muted); }
   .step { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fafbfc; display: flex; flex-direction: column; gap: 4px; min-height: 92px; }
   .step .t { font-weight: 700; font-size: 14px; }
   .step .n { display: inline-flex; width: 26px; height: 22px; border-radius: 6px; align-items: center; justify-content: center; background: var(--todo); font-size: 12px; font-weight: 700; margin-right: 6px; }
@@ -154,8 +158,8 @@
     main { padding: 12px; }
     .ship-list { grid-template-columns: 1fr; }
     .stepper { grid-template-columns: 1fr 1fr; }
-    .stepper .col4 { grid-column: span 2; grid-template-columns: 1fr 1fr; }
-    .stepper > .step:last-child, .stepper > .step:nth-child(3) { grid-column: span 2; }
+    .stepper .branch { grid-column: span 2; }
+    .stepper > .step:last-child { grid-column: span 2; }
     input.inp, select.inp, textarea.inp { font-size: 16px; }
     .modal-bg { align-items: flex-end; padding: 0; }
     .modal { border-radius: 14px 14px 0 0; max-height: 92vh; }
@@ -271,8 +275,9 @@
     </div>
     <div class="card small muted" style="max-width:560px;margin-top:12px">
       <b>流程</b><br />
-      1 庫存系統人員匯入點貨單（自動出現在這裡）→ 2 倉庫點好數量按「數量已確認」→ 3 主管1 確認入庫存（密碼）→
-      4a 主管2 上架系統（密碼）＋ 4b Renfrew 店員清點並歸架 → 5 兩者都完成後，Renfrew 店員掃描 Pending 商品上架店內，完成後進貨表自動隱藏。
+      1 庫存系統人員匯入點貨單（自動出現在這裡）→ 2 倉庫點好數量按「數量已確認」→ 分成兩條平行支線：
+      【3 主管1 確認入庫存（密碼）→ 4a 主管2 上架系統（密碼）】與【4b Renfrew 店員清點並歸架】→
+      5 兩條都完成後，Renfrew 店員掃描 Pending 商品上架店內，完成後進貨表自動隱藏。
     </div>
   </section>
 </main>
@@ -461,19 +466,17 @@ function refreshCurrent() {
 function progressBar(steps) {
   const cls = (k, now) => (steps[k] ? 'done' : now.includes(k) ? 'now' : '');
   const now = nextOf(steps);
-  return `<div class="progress" title="1 匯入 · 2 數量確認 · 3 入庫存 · 4a 上架系統 / 4b Renfrew 清點 · 5 上架店內">
-    <div class="seg done"></div><div class="seg ${cls('2', now)}"></div><div class="seg ${cls('3', now)}"></div>
-    <div class="seg split"><span class="${cls('4a', now)}"></span><span class="${cls('4b', now)}"></span></div>
+  return `<div class="progress" title="1 匯入 · 2 數量確認 · 上排：3 入庫存 → 4a 上架系統 · 下排：4b Renfrew 清點 · 5 上架店內">
+    <div class="seg done"></div><div class="seg ${cls('2', now)}"></div>
+    <div class="branch"><div><span class="${cls('3', now)}"></span><span class="${cls('4a', now)}"></span></div>
+      <div><span class="${cls('4b', now)}"></span></div></div>
     <div class="seg ${cls('5', now)}"></div></div>`;
 }
+// 流程：1 → 2 → [3 → 4a] 與 [4b] 兩條平行支線 → 5
+const PREREQ = { '2': [], '3': ['2'], '4a': ['3'], '4b': ['2'], '5': ['4a', '4b'] };
+const LATER = { '2': ['3', '4b'], '3': ['4a'], '4a': ['5'], '4b': ['5'], '5': [] };
 function nextOf(steps) {
-  if (steps['5']) return [];
-  if (!steps['2']) return ['2'];
-  if (!steps['3']) return ['3'];
-  const out = [];
-  if (!steps['4a']) out.push('4a');
-  if (!steps['4b']) out.push('4b');
-  return out.length ? out : ['5'];
+  return ['2', '3', '4a', '4b', '5'].filter((k) => !steps[k] && PREREQ[k].every((p) => steps[p]));
 }
 function whTag(s) {
   if (s.whStatus === 'FINALIZED') return '<span class="tag ok">庫存 Finalized</span>';
@@ -566,8 +569,7 @@ function stepCard(s, k) {
     ${action}</div>`;
 }
 function canUndo(s, k) {
-  const later = { '2': ['3'], '3': ['4a', '4b'], '4a': ['5'], '4b': ['5'], '5': [] }[k];
-  return later && !later.some((x) => s.steps[x]);
+  return LATER[k] && !LATER[k].some((x) => s.steps[x]);
 }
 
 function allocCell(main, sub) {
@@ -610,8 +612,8 @@ function renderDetail() {
         </div>
       </div>
       <div class="stepper">
-        ${stepCard(s, '1')}${stepCard(s, '2')}${stepCard(s, '3')}
-        <div class="col4">${stepCard(s, '4a')}${stepCard(s, '4b')}</div>
+        ${stepCard(s, '1')}${stepCard(s, '2')}
+        <div class="branch">${stepCard(s, '3')}${stepCard(s, '4a')}${stepCard(s, '4b')}</div>
         ${stepCard(s, '5')}
       </div>
     </div>
