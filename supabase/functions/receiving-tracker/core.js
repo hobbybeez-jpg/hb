@@ -768,6 +768,21 @@ const SHOPIFY_ACTIONS = {
     return db.transaction((tx) => API.getShipment(tx, { shipmentId: id }));
   },
 
+  // Settings page: check the Shopify settings and sign-in without changing anything
+  async shopifyTestConnection(db, args, ctx) {
+    await db.transaction(async (tx) => {
+      await checkAccess(tx, ctx);
+      requireUser(ctx);
+    });
+    const shopify = requireShopify(ctx);
+    try {
+      const r = await shopify.testConnection();
+      return { ok: true, shopName: r.shopName, domain: r.domain };
+    } catch (error) {
+      throw new UserError(transferErrorMessage(error));
+    }
+  },
+
   // Detach the transfer (after canceling it in Shopify) so a new one can be created (admin password)
   async shopifyUnlinkTransfer(db, { shipmentId, adminPassword, note }, ctx) {
     const id = cleanText(shipmentId, 300);

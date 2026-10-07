@@ -137,6 +137,18 @@ export function createShopify(config, fetchImpl = fetch) {
     toLocationId: to,
     graphql,
 
+    // Read-only check: sign-in works and the app can read products and transfers. Creates nothing.
+    async testConnection() {
+      const data = await graphql(
+        `query TrkCheck {
+          shop { name myshopifyDomain }
+          productVariants(first: 1) { nodes { id } }
+          inventoryTransfers(first: 1) { nodes { id } }
+        }`
+      );
+      return { shopName: data.shop.name, domain: data.shop.myshopifyDomain };
+    },
+
     transferUrl(transferId) {
       return transferId ? `https://${store}/admin/transfers/${numericId(transferId)}` : '';
     },
