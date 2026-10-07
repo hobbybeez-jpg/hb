@@ -26,7 +26,7 @@
 | 步驟 | 誰 | 動作 | 需要 |
 |---|---|---|---|
 | 1 | 庫存系統人員 | 在庫存系統 Data Import 匯入點貨單 | 自動出現在追蹤清單 |
-| 2 | 倉庫人員 | 在**庫存系統** Receiving 頁按 Finalize Shipment 左邊的「Qty Confirmed」（不需要 Finalize）；按 Finalize 時若還沒按過也會自動完成步驟 2。追蹤頁也可以按（備用） | — |
+| 2 | 倉庫人員 | 在**庫存系統** Receiving 頁按 Finalize Shipment 左邊的「Qty Confirmed」（不需要 Finalize）；按 Finalize 時若還沒按過也會自動完成步驟 2。追蹤頁不能完成步驟 2（只顯示「等待庫存系統 Qty Confirmed」），但可以 Undo | — |
 | 3 | 主管1 | 確認入庫存 | 步驟 2；主管1 密碼；庫存系統尚未 Finalize 時會提醒 |
 | 4a | 主管2 | 商品上架系統；有 Renfrew 商品時自動在 Shopify 建立調貨單（運送中） | 步驟 3；主管2 密碼 |
 | 4b | Renfrew 店員 | 清點到貨商品（掃描 UPC 每次 +1，或直接輸入），**每掃一次就存檔**，可以分批、隔天繼續；全部點齊自動完成，缺貨可填備註後按 Complete 4b | 步驟 2（和 3 平行，不用等 3） |
