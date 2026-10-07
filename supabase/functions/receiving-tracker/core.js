@@ -544,7 +544,7 @@ const API = {
     };
   },
 
-  // ---------- Renfrew backroom ----------
+  // ---------- Renfrew stock ----------
 
   async renfrewMap(tx) {
     const locations = await tx.query('select * from trk.renfrew_locations where active order by sort, code');
@@ -697,9 +697,8 @@ const API = {
 
   // ---------- Admin ----------
 
-  async addLocation(tx, { code, rack, password }, ctx) {
+  async addLocation(tx, { code, rack }, ctx) {
     requireUser(ctx);
-    await verifyPassword(tx, await adminKeys(tx), password, 'manager');
     code = cleanText(code, 20).toUpperCase();
     rack = cleanText(rack || code, 20).toUpperCase();
     if (!/^[A-Z0-9][A-Z0-9-]*$/.test(code) || !/^[A-Z0-9][A-Z0-9-]*$/.test(rack)) {
@@ -717,9 +716,8 @@ const API = {
     return API.renfrewMap(tx);
   },
 
-  async removeLocation(tx, { code, password }, ctx) {
+  async removeLocation(tx, { code }, ctx) {
     requireUser(ctx);
-    await verifyPassword(tx, await adminKeys(tx), password, 'manager');
     code = cleanText(code, 20).toUpperCase();
     if (code === PENDING) throw new UserError('Pending cannot be removed.');
     const stock = await tx.query('select coalesce(sum(qty), 0) as n from trk.renfrew_stock where location_code = $1', [code]);

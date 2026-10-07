@@ -15,7 +15,7 @@
 |---|---|---|---|
 | 1 匯入點貨單 | Imported | 進貨表 | Shipments |
 | 2 數量已確認 | Qty Confirmed | 掃描查詢 | UPC Lookup |
-| 3 確認入庫存 | Inventory Confirmed | Renfrew 倉庫 | Renfrew Backroom |
+| 3 確認入庫存 | Inventory Confirmed | Renfrew 庫存 | Renfrew Stock |
 | 4a 上架系統 | Listed Online | 異動紀錄 | Activity Log |
 | 4b Renfrew 清點 | Renfrew Count | 設定 | Settings |
 | 5 上架店內 | On Store Shelf | 待歸架 | To Put Away |
@@ -50,11 +50,11 @@
 - 清單：供應商、進貨表編號、建立日期、進度條（目前步驟為橘色）、庫存系統狀態、收貨進度。
 - 明細：商品名、UPC、數量（下方小字＝已收）、分配到 PO／MARINE／RENFREW 的數量（來自庫存系統的計畫數量；
   實際分配不同時以小字顯示，PO 下方顯示已分配的訂單號碼）。
-- 掃描查詢：掃 UPC 找出所屬的進貨表（未完成的排在前面），以及在 Renfrew 倉庫的位置與待歸架數量。
+- 掃描查詢：掃 UPC 找出所屬的進貨表（未完成的排在前面），以及在 Renfrew 庫存的位置與待歸架數量。
 
-## Renfrew 倉庫
+## Renfrew 庫存（Renfrew Stock）
 
-- 預設貨架：**N、PP、PF、A、B、MH** 和 **Pending（暫置）**。可在「管理格位」新增格位（例如 N-1、N-2）或新的貨架（需要主管密碼）。
+- 預設貨架：**N、PP、PF、A、B、MH** 和 **Pending（暫置）**。可在「管理格位」新增格位（例如 N-1、N-2）或新的貨架（不需要密碼；刪除格位時該格必須是空的）。
 - **待歸架**：4b 清點完的商品進入待歸架清單，選位置歸架（可一次「全部放到」某個位置）。
 - **掃描移出 Pending**：每掃一次＝一件上架店內（步驟 5 的視窗裡也可以掃）。若所屬進貨表 4a 尚未完成會提醒。
 - 點格位可以看內容、**移動**、**移出**（上架店內／售出／損壞／數量調整／其他）。
@@ -71,7 +71,7 @@
 | `pw_access` | 員工密碼（進入系統）；未設定＝不需要 |
 | `pw_step3` | 主管1：確認入庫存 |
 | `pw_step4a` | 主管2：上架系統 |
-| `pw_admin` | 管理密碼：撤銷步驟、管理格位、變更密碼；未設定時可用主管1或主管2的密碼 |
+| `pw_admin` | 管理密碼：撤銷步驟、變更密碼；未設定時可用主管1或主管2的密碼 |
 
 第一次設定（Supabase SQL Editor，把密碼換成你的）：
 
