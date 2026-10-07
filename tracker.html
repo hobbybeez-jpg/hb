@@ -68,6 +68,15 @@
   .ship .sup { font-weight: 700; font-size: 16px; }
   .ship .num { font-family: ui-monospace, Menlo, Consolas, monospace; }
   .ship.done { opacity: .75; }
+  /* Shipment list: compact rows like the inventory dashboard */
+  table.ships { min-width: 820px; }
+  table.ships th { text-transform: uppercase; letter-spacing: .03em; }
+  table.ships td { vertical-align: middle; padding: 10px 8px; }
+  table.ships tbody tr { cursor: pointer; }
+  table.ships tbody tr:hover td { background: #f7f9fc; }
+  table.ships tr.done td { opacity: .7; }
+  table.ships .progress { width: 150px; }
+  table.ships .ship-name { font-weight: 700; }
   .progress { display: flex; gap: 3px; height: 10px; }
   .progress .seg { flex: 1; background: var(--todo); border-radius: 3px; }
   .progress { height: 14px; }
@@ -164,6 +173,8 @@
     .modal-bg { align-items: flex-end; padding: 0; }
     .modal { border-radius: 14px 14px 0 0; max-height: 92vh; }
     .hide-sm { display: none !important; }
+    table.ships { min-width: 600px; }
+    table.ships .progress { width: 110px; }
     .show-sm { display: flex !important; }
   }
   .show-sm { display: none; }
@@ -183,7 +194,7 @@
   <nav class="tabs" id="tabs">
     <button data-tab="list" class="active">Shipments</button>
     <button data-tab="search">UPC Lookup</button>
-    <button data-tab="renfrew">Renfrew Backroom<span class="badge hidden" id="putBadge"></span></button>
+    <button data-tab="renfrew">Renfrew Stock<span class="badge hidden" id="putBadge"></span></button>
     <button data-tab="log">Activity Log</button>
     <button data-tab="settings">Settings</button>
   </nav>
@@ -202,7 +213,7 @@
         <input class="inp grow" id="listFilter" placeholder="Filter by supplier / shipment #" style="max-width:320px" />
         <button class="btn" id="refreshList" type="button">Refresh</button>
       </div>
-      <div id="shipList" class="ship-list"></div>
+      <div id="shipList"></div>
     </div>
     <div id="detailView" class="hidden"></div>
   </section>
@@ -210,7 +221,7 @@
   <!-- UPC lookup -->
   <section id="tab-search" class="hidden">
     <div class="card">
-      <div class="small muted" style="margin-bottom:6px">Scan or type a UPC to see which shipments it belongs to (open shipments first) and where it is in the Renfrew backroom.</div>
+      <div class="small muted" style="margin-bottom:6px">Scan or type a UPC to see which shipments it belongs to (open shipments first) and where it is in Renfrew stock.</div>
       <form class="scanbox" id="searchForm">
         <input class="inp" id="searchInput" inputmode="numeric" autocomplete="off" placeholder="UPC" />
         <button class="btn scan-btn" type="button" data-scan-for="searchInput">📷 Scan</button>
@@ -220,7 +231,7 @@
     <div id="searchResult"></div>
   </section>
 
-  <!-- Renfrew backroom -->
+  <!-- Renfrew stock -->
   <section id="tab-renfrew" class="hidden">
     <div class="row" style="margin-bottom:12px">
       <button class="btn warn" id="btnPutaway" type="button">To Put Away <span id="putCount"></span></button>
@@ -263,7 +274,7 @@
           <select class="inp" id="pwKey">
             <option value="pw_step3">Manager 1: Inventory Confirmed (step 3)</option>
             <option value="pw_step4a">Manager 2: Listed Online (step 4a)</option>
-            <option value="pw_admin">Admin (undo steps, manage locations)</option>
+            <option value="pw_admin">Admin (undo steps)</option>
             <option value="pw_access">Staff password (to open the app)</option>
           </select>
         </label>
@@ -502,21 +513,22 @@ function renderList() {
     box.innerHTML = `<div class="empty">${state.filter === 'open' ? 'No shipments in progress.' : 'Nothing here.'}</div>`;
     return;
   }
-  box.innerHTML = rows.map((s) => {
-    const next = s.nextSteps.map((k) => `${k} ${STEP_LABELS[k]}`).join(', ');
-    return `<div class="card ship ${s.done ? 'done' : ''}" data-id="${esc(s.shipmentId)}" tabindex="0">
-      <div class="row"><span class="sup">${esc(s.supplier || '(no supplier)')}</span><span class="grow"></span>${whTag(s)}</div>
-      <div class="row"><span class="num">${esc(s.name)}</span><span class="grow"></span><span class="small muted">Created ${fmtDate(s.createdAt)}</span></div>
-      ${progressBar(s.steps)}
-      <div class="row next">
-        ${s.done ? `<span class="tag ok">Completed ${fmtDate(s.steps['5'].at)}</span>` : `<span>Next: <b>${esc(next)}</b></span>`}
-        <span class="grow"></span>
-        <span class="small muted">${s.lineCount} items · received ${s.receivedUnits}/${s.expectedUnits}${s.renfrewUnits ? ` · Renfrew ${s.renfrewUnits}` : ''}</span>
-      </div></div>`;
-  }).join('');
+  box.innerHTML = `<div class="table-wrap"><table class="grid ships"><thead><tr>
+      <th>Shipment</th><th>Supplier</th><th class="hide-sm">Created</th><th>Progress</th><th>Next Step</th><th class="hide-sm">Inventory</th><th class="num">Received</th><th></th>
+    </tr></thead><tbody>${rows.map((s) => `
+      <tr class="${s.done ? 'done' : ''}" data-id="${esc(s.shipmentId)}" tabindex="0">
+        <td class="ship-name mono">${esc(s.name)}</td>
+        <td>${esc(s.supplier || '(no supplier)')}</td>
+        <td class="nowrap hide-sm">${fmtDate(s.createdAt)}</td>
+        <td>${progressBar(s.steps)}</td>
+        <td>${s.done ? `<span class="tag ok">Completed ${fmtDate(s.steps['5'].at)}</span>` : s.nextSteps.map((k) => `<span class="tag warn">${k} ${esc(STEP_LABELS[k])}</span>`).join(' ')}</td>
+        <td class="hide-sm">${whTag(s)}</td>
+        <td class="num nowrap">${s.receivedUnits}/${s.expectedUnits}<div class="alloc-sub">${s.lineCount} items${s.renfrewUnits ? ` · Renfrew ${s.renfrewUnits}` : ''}</div></td>
+        <td><button class="btn small" type="button">Open</button></td>
+      </tr>`).join('')}</tbody></table></div>`;
 }
-$('#shipList').addEventListener('click', (e) => { const c = e.target.closest('.ship'); if (c) openDetail(c.dataset.id); });
-$('#shipList').addEventListener('keydown', (e) => { const c = e.target.closest('.ship'); if (c && e.key === 'Enter') openDetail(c.dataset.id); });
+$('#shipList').addEventListener('click', (e) => { const r = e.target.closest('tr[data-id]'); if (r) openDetail(r.dataset.id); });
+$('#shipList').addEventListener('keydown', (e) => { const r = e.target.closest('tr[data-id]'); if (r && e.key === 'Enter') openDetail(r.dataset.id); });
 $('#listFilter').addEventListener('input', renderList);
 $('#refreshList').onclick = () => loadList();
 $$('#filterChips .chip').forEach((b) => (b.onclick = () => {
@@ -858,7 +870,7 @@ async function runSearch(upc) {
     box.innerHTML = `
       <div class="section-title">${esc(r.productName || '(product name not found)')} <span class="mono muted">${esc(r.upc)}</span></div>
       ${r.toPutaway.length ? `<div class="note-box" style="margin-bottom:8px">Renfrew to put away: ${r.toPutaway.map((t) => `${esc(shipLabel(t.shipment))} × ${t.remaining}`).join(', ')}</div>` : ''}
-      ${r.stock.length ? `<div class="card" style="margin-bottom:10px"><b>Renfrew backroom locations</b><div class="row" style="margin-top:6px">${r.stock.map((x) =>
+      ${r.stock.length ? `<div class="card" style="margin-bottom:10px"><b>Renfrew stock locations</b><div class="row" style="margin-top:6px">${r.stock.map((x) =>
         `<span class="tag ${x.locationCode === 'PENDING' ? 'pending' : ''}" style="font-size:14px">${esc(x.locationCode)} × ${x.qty}${x.shipment ? ` · ${esc(x.shipment.name)}` : ''}</span>`).join('')}</div></div>` : ''}
       ${open.length ? `<div class="section-title">Open shipments (${open.length})</div><div class="ship-list">${open.map(card).join('')}</div>` : ''}
       ${done.length ? `<div class="section-title">Completed (${done.length})</div><div class="ship-list">${done.map(card).join('')}</div>` : ''}
@@ -867,7 +879,7 @@ async function runSearch(upc) {
   } catch (e) { box.innerHTML = `<div class="empty err">${esc(e.message)}</div>`; }
 }
 
-// ---------------- Renfrew backroom ----------------
+// ---------------- Renfrew stock ----------------
 function allCells() { return state.map ? state.map.racks.flatMap((r) => r.cells) : []; }
 function locationOptions(selected) {
   return allCells().map((c) => `<option value="${esc(c.code)}" ${c.code === selected ? 'selected' : ''}>${esc(c.code)}${c.code === 'PENDING' ? ' (holding)' : ''}</option>`).join('');
@@ -1070,7 +1082,7 @@ $('#btnLocations').onclick = async () => {
   try { await ensureMap(); } catch (e) { toast(e.message, 'bad'); return; }
   const racks = state.map.racks.map((r) => r.rack);
   const m = modal({ title: 'Manage Locations', narrow: true,
-    body: `<div class="small muted">Add a location under a rack (e.g. N-1, N-2), or add a new rack (rack name = location code). Requires the manager password.</div>
+    body: `<div class="small muted">Add a location under a rack (e.g. N-1, N-2), or add a new rack (rack name = location code).</div>
       <label class="f">Rack<input class="inp" id="locRack" list="rackList" placeholder="e.g. N" /></label>
       <datalist id="rackList">${racks.map((r) => `<option value="${esc(r)}">`).join('')}</datalist>
       <label class="f">Location code<input class="inp" id="locCode" placeholder="e.g. N-1" /></label>
@@ -1082,10 +1094,9 @@ $('#btnLocations').onclick = async () => {
   const run = async (fn) => {
     const code = $('#locCode', m.body).value.trim().replace(/-$/, '');
     if (!code) { toast('Enter a location code', 'bad'); return; }
-    const pw = await askPassword(fn === 'addLocation' ? 'Add Location' : 'Remove Location', 'Manager password required');
-    if (pw == null) return;
+    if (fn === 'removeLocation' && !confirm(`Remove location ${code.toUpperCase()}?`)) return;
     try {
-      state.map = await api(fn, { code, rack: $('#locRack', m.body).value.trim() || code, password: pw });
+      state.map = await api(fn, { code, rack: $('#locRack', m.body).value.trim() || code });
       toast(fn === 'addLocation' ? 'Added ' + code.toUpperCase() : 'Removed ' + code.toUpperCase(), 'ok');
       if (state.tab === 'renfrew') renderMap();
     } catch (e) { toast(e.message, 'bad'); }
@@ -1105,7 +1116,7 @@ $('#mapFindForm').onsubmit = async (e) => {
     state.findCodes = new Set(r.stock.map((x) => x.locationCode));
     $('#mapFindResult').innerHTML = `<b>${esc(r.productName || r.upc)}</b>: ` + (r.stock.length
       ? r.stock.map((x) => `<span class="tag ${x.locationCode === 'PENDING' ? 'pending' : ''}">${esc(x.locationCode)} × ${x.qty}</span>`).join(' ')
-      : '<span class="muted">Not in the Renfrew backroom</span>') +
+      : '<span class="muted">Not in Renfrew stock</span>') +
       (r.toPutaway.length ? ` · <span class="tag warn">To put away ${r.toPutaway.reduce((n, t) => n + t.remaining, 0)}</span>` : '');
     if (r.stock.length === 1) state.selectedCell = r.stock[0].locationCode;
     if (!state.map) state.map = await api('renfrewMap');
