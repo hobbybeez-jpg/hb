@@ -1331,22 +1331,34 @@ async function openPutaway(onlyShipmentId) {
 }
 $('#btnPutaway').onclick = () => openPutaway('');
 
-// Batch put-away: choose a box, scan items (1 scan = 1 pc), then put them all away at once.
-// Scans stay in this window until "Put away"; the server checks every quantity again in one transaction.
-async function openBatchPutaway(onlyShipmentId) {
+// Batch scan into one box (1 scan = 1 pc); nothing is saved until "Put away" / "Add".
+//   From shipment: counted items on the put-away list (can mix shipments); the server checks every quantity again.
+//   From stock: items not from any shipment (e.g. stock-count corrections); names come from lookupUpc.
+async function openBatchPutaway(onlyShipmentId, startMode) {
   try { state.map = await api('renfrewMap'); } catch (e) { toast(e.message, 'bad'); return; }
   const key = (u) => String(u || '').replace(/^0+/, '');
   const rowsFor = (k) => state.map.toPutaway.filter((x) => key(x.upc) === k && (!onlyShipmentId || x.shipmentId === onlyShipmentId));
   const left = (k) => rowsFor(k).reduce((n, x) => n + x.remaining, 0);
-  const scanned = new Map();  // UPC without leading zeros -> { upc, productName, qty }; latest scan last
+  // Name already known to this page (Renfrew stock or the put-away list)
+  const knownName = (k) => {
+    for (const r of state.map.racks) for (const c of r.cells) for (const i of c.items) if (key(i.upc) === k && i.productName) return i.productName;
+    const p = state.map.toPutaway.find((x) => key(x.upc) === k && x.productName);
+    return p ? p.productName : '';
+  };
+  let mode = onlyShipmentId ? 'shipment' : (startMode === 'stock' ? 'stock' : 'shipment');
+  const stock = () => mode === 'stock';
+  // UPC without leading zeros -> { upc, productName, qty, looking, needName, hint }; latest scan last
+  const scanned = new Map();
   const total = () => [...scanned.values()].reduce((n, x) => n + x.qty, 0);
   let saved = false;
   const body = document.createElement('div');
   body.className = 'list';
   const start = state.selectedCell && state.map.racks.some((r) => r.cells.some((c) => c.code === state.selectedCell)) ? state.selectedCell : '';
   body.innerHTML = `
-    <div class="small muted">Choose a box, then scan each item (1 scan = 1 pc). Nothing is saved until you press Put away.
-      ${onlyShipmentId ? '<br>Only items from this shipment.' : ''}</div>
+    ${onlyShipmentId ? '' : `<div class="chips" id="bxMode" style="display:flex">
+      <button class="chip" type="button" data-mode="shipment" style="flex:1">From shipment</button>
+      <button class="chip" type="button" data-mode="stock" style="flex:1">From stock</button></div>`}
+    <div class="small muted" id="bxHelp"></div>
     <label class="f">Box<select class="inp" id="bxLoc">${locationOptions(start, { placeholder: 'Choose box…' })}</select></label>
     <form class="scanbox" id="bxScan"><input class="inp" inputmode="numeric" autocomplete="off" placeholder="Scan UPC" />
       <button class="btn scan-btn" type="button">📷</button></form>
@@ -1354,27 +1366,37 @@ async function openBatchPutaway(onlyShipmentId) {
     <div class="list" id="bxList"></div>`;
   const m = modal({ title: 'Scan into Box', body,
     foot: '<button class="btn" type="button" data-a="cancel">Cancel</button><button class="btn primary" type="button" data-a="ok" disabled>Put away</button>',
-    beforeClose: () => saved || !total() || confirm(`Discard ${total()} scanned pc(s)? Nothing has been put away yet.`),
+    beforeClose: () => saved || !total() || confirm(`Discard ${total()} scanned pc(s)? Nothing has been saved yet.`),
     onClose: () => { if (state.tab === 'renfrew') loadMap(); if (state.detailId) loadDetail(state.detailId); } });
   const input = $('#bxScan input', body);
   const okBtn = $('[data-a=ok]', m.foot);
+  const renderMode = () => {
+    $$('#bxMode .chip', body).forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
+    $('#bxHelp', body).innerHTML = stock()
+      ? 'Items not from any shipment (e.g. stock-count corrections). Scan each item (1 scan = 1 pc). Nothing is saved until you press Add.'
+      : `Counted items from shipments. Scan each item (1 scan = 1 pc). Nothing is saved until you press Put away.${onlyShipmentId ? '<br>Only items from this shipment.' : ''}`;
+  };
   const renderList = (flashKey) => {
     const n = total();
+    const verb = stock() ? 'Add' : 'Put away';
     $('#bxTotal', body).textContent = n ? `${n} pc(s) scanned · ${scanned.size} item(s)` : '';
     okBtn.disabled = !n;
-    okBtn.textContent = n ? `Put away ${n} pc(s)` : 'Put away';
+    okBtn.textContent = n ? `${verb} ${n} pc(s)` : verb;
     $('#bxList', body).innerHTML = [...scanned.entries()].reverse().map(([k, x]) => `
       <div class="item ${k === flashKey ? 'flash' : ''}" data-k="${esc(k)}">
-        <div class="nm"><b>${esc(x.productName || x.upc)}</b><span class="mono muted">${esc(x.upc)}</span>
-          <div class="small muted">${left(k)} left to put away</div></div>
+        <div class="nm"><b>${x.looking ? '<span class="spin"></span> Looking up…' : esc(x.productName || x.upc)}</b><span class="mono muted">${esc(x.upc)}</span>
+          ${stock()
+            ? `${x.needName ? `<input class="inp" data-nm value="${esc(x.productName)}" placeholder="No product found: type the name" />` : ''}
+               ${x.hint ? `<div class="small muted">${esc(x.hint)}</div>` : ''}`
+            : `<div class="small muted">${left(k)} left to put away</div>`}</div>
         <button class="btn small" type="button" data-d="-1" aria-label="One less">−</button>
-        <input class="inp qty" type="number" min="0" max="${left(k)}" value="${x.qty}" data-q aria-label="Qty" />
+        <input class="inp qty" type="number" min="0" ${stock() ? '' : `max="${left(k)}"`} value="${x.qty}" data-q aria-label="Qty" />
         <button class="btn small" type="button" data-d="1" aria-label="One more">+</button>
         <button class="link" type="button" data-rm>Remove</button>
       </div>`).join('') || '<div class="empty" style="padding:16px">Nothing scanned yet</div>';
     const setQty = (k, q) => {
       const x = scanned.get(k);
-      x.qty = Math.max(0, Math.min(left(k), q));
+      x.qty = Math.max(0, stock() ? q : Math.min(left(k), q));
       if (!x.qty) scanned.delete(k);
       renderList();
     };
@@ -1383,25 +1405,62 @@ async function openBatchPutaway(onlyShipmentId) {
       $$('[data-d]', it).forEach((b) => (b.onclick = () => setQty(k, scanned.get(k).qty + Number(b.dataset.d))));
       $('[data-q]', it).onchange = (e) => setQty(k, parseInt(e.target.value, 10) || 0);
       $('[data-rm]', it).onclick = () => { scanned.delete(k); renderList(); };
+      const nm = $('[data-nm]', it);
+      if (nm) nm.oninput = () => { scanned.get(k).productName = nm.value; };
     });
+  };
+  // From stock: inventory system, tracker records, then Shopify; the name can be typed when nothing is found
+  const lookup = async (k, x) => {
+    try {
+      const r = await api('lookupUpc', { upc: x.upc });
+      if (!x.productName) x.productName = r.productName || '';
+      if (r.source === 'shopify') x.hint = `Name from Shopify (hobby-bee.com)${r.matches > 1 ? ` · ${r.matches} products share this barcode, check it` : ''}.`;
+    } catch (e) { /* type the name instead */ }
+    x.looking = false;
+    x.needName = !x.productName;
+    if (scanned.get(k) === x) renderList();
   };
   const scan = (code) => {
     const k = key(code);
+    if (!k) return;
+    if (stock()) {
+      let x = scanned.get(k);
+      if (!x) {
+        x = { upc: code, productName: knownName(k), qty: 0 };
+        if (!x.productName) { x.looking = true; lookup(k, x); }
+        if (rowsFor(k).length) x.hint = 'Also on the put-away list (use From shipment for shipment items).';
+      }
+      x.qty += 1;
+      scanned.delete(k); scanned.set(k, x);  // newest scan shows first
+      beep(true);
+      renderList(k);
+      return;
+    }
     const rows = rowsFor(k);
-    if (!rows.length) { beep(false); toast(`Not on the put-away list${onlyShipmentId ? ' for this shipment' : ''}: ${code}`, 'bad'); return; }
+    if (!rows.length) {
+      beep(false);
+      toast(`Not on the put-away list${onlyShipmentId ? ' for this shipment' : ''}: ${code}${onlyShipmentId ? '' : ' (use From stock for items not from a shipment)'}`, 'bad');
+      return;
+    }
     const x = scanned.get(k) || { upc: rows[0].upc, productName: rows[0].productName, qty: 0 };
     if (x.qty >= left(k)) { beep(false); toast(`${x.productName || x.upc}: all ${left(k)} already scanned`, 'bad'); return; }
     x.qty += 1;
-    scanned.delete(k); scanned.set(k, x);  // newest scan shows first
+    scanned.delete(k); scanned.set(k, x);
     beep(true);
     renderList(k);
   };
+  $$('#bxMode .chip', body).forEach((b) => (b.onclick = () => {
+    if (b.dataset.mode === mode) return;
+    if (total() && !confirm(`Discard ${total()} scanned pc(s) and switch to "${b.textContent}"? Nothing has been saved yet.`)) return;
+    mode = b.dataset.mode;
+    scanned.clear();
+    renderMode(); renderList();
+    input.focus();
+  }));
   $('#bxScan', body).onsubmit = (e) => { e.preventDefault(); const v = input.value.trim(); input.value = ''; if (v) scan(v); };
   $('.scan-btn', body).onclick = () => openScanner(scan, { continuous: true });
   $('[data-a=cancel]', m.foot).onclick = m.close;
-  okBtn.onclick = async () => {
-    const loc = $('#bxLoc', body).value;
-    if (!loc) { toast('Choose a box first.', 'bad'); $('#bxLoc', body).focus(); return; }
+  const putAway = (loc) => {
     // Spread each UPC over its put-away lines (oldest shipment first)
     const items = [];
     for (const [k, x] of scanned) {
@@ -1410,14 +1469,26 @@ async function openBatchPutaway(onlyShipmentId) {
         const n = Math.min(need, r.remaining);
         if (n > 0) { items.push({ shipmentId: r.shipmentId, lineId: r.lineId, locationCode: loc, qty: n }); need -= n; }
       }
-      if (need > 0) { toast(`${x.productName || x.upc}: only ${x.qty - need} left to put away`, 'bad'); return; }
+      if (need > 0) throw new Error(`${x.productName || x.upc}: only ${x.qty - need} left to put away`);
     }
+    return api('renfrewPutaway', { items });
+  };
+  const addStock = (loc) => {
+    const list = [...scanned.values()];
+    if (list.some((x) => x.looking)) throw new Error('Still looking up product names. Try again in a moment.');
+    const unnamed = list.find((x) => !String(x.productName || '').trim());
+    if (unnamed) throw new Error(`${unnamed.upc}: type the product name.`);
+    return api('renfrewAdd', { items: list.map((x) => ({ upc: x.upc, productName: x.productName, locationCode: loc, qty: x.qty })) });
+  };
+  okBtn.onclick = async () => {
+    const loc = $('#bxLoc', body).value;
+    if (!loc) { toast('Choose a box first.', 'bad'); $('#bxLoc', body).focus(); return; }
     const n = total();
     okBtn.disabled = true;
     try {
-      state.map = await api('renfrewPutaway', { items });
+      state.map = await (stock() ? addStock(loc) : putAway(loc));
       saved = true;
-      toast(`Put away ${n} pc(s) into ${loc}`, 'ok');
+      toast(`${stock() ? 'Added' : 'Put away'} ${n} pc(s) into ${loc}`, 'ok');
       renderPutBadge();
       m.close();
     } catch (e) {
@@ -1426,6 +1497,7 @@ async function openBatchPutaway(onlyShipmentId) {
       renderList();
     }
   };
+  renderMode();
   renderList();
   setTimeout(() => (start ? input : $('#bxLoc', body)).focus(), 30);
   $('#bxLoc', body).onchange = () => input.focus();
@@ -1460,42 +1532,8 @@ $('#btnScanOut').onclick = () => {
   setTimeout(() => input.focus(), 30);
 };
 
-// Add item manually
-$('#btnAddStock').onclick = async () => {
-  try { await ensureMap(); } catch (e) { toast(e.message, 'bad'); return; }
-  const m = modal({ title: 'Add Item Manually', narrow: true,
-    body: `<div class="small muted">For items that are not part of any shipment (e.g. stock-count corrections).</div>
-      <form class="scanbox" id="addScan"><input class="inp" id="addUpc" inputmode="numeric" autocomplete="off" placeholder="UPC" />
-        <button class="btn scan-btn" type="button">📷</button></form>
-      <label class="f">Product name<input class="inp" id="addName" placeholder="Filled in after scanning" /></label>
-      <div class="small muted" id="addNameHint"></div>
-      <label class="f">Location<select class="inp" id="addLoc">${locationOptions(state.selectedCell || 'N-1')}</select></label>
-      <label class="f">Qty<input class="inp qty" id="addQty" type="number" min="1" value="1" /></label>`,
-    foot: '<button class="btn" type="button" data-a="cancel">Cancel</button><button class="btn primary" type="button" data-a="ok">Add</button>' });
-  const upcInput = $('#addUpc', m.body);
-  const lookup = async () => {
-    const v = upcInput.value.trim(); if (!v) return;
-    const hint = $('#addNameHint', m.body);
-    hint.innerHTML = '<span class="spin"></span> Looking up…';
-    try {
-      const r = await api('lookupUpc', { upc: v });
-      if (r.productName) $('#addName', m.body).value = r.productName;
-      hint.textContent = r.source === 'shopify' ? `Name from Shopify (hobby-bee.com)${r.matches > 1 ? ` · ${r.matches} products share this barcode, check it` : ''}. You can edit it.`
-        : r.productName ? '' : 'No product found for this UPC. Please type the name.';
-    } catch (e) { hint.textContent = ''; }
-  };
-  $('#addScan', m.body).onsubmit = (e) => { e.preventDefault(); lookup(); $('#addQty', m.body).focus(); };
-  upcInput.onchange = lookup;
-  $('.scan-btn', m.body).onclick = () => openScanner((code) => { upcInput.value = code; lookup(); });
-  $('[data-a=cancel]', m.foot).onclick = m.close;
-  $('[data-a=ok]', m.foot).onclick = async () => {
-    try {
-      state.map = await api('renfrewAdd', { upc: upcInput.value, productName: $('#addName', m.body).value, locationCode: $('#addLoc', m.body).value, qty: Number($('#addQty', m.body).value) });
-      m.close(); toast('Added', 'ok'); if (state.tab === 'renfrew') renderMap();
-    } catch (e) { toast(e.message, 'bad'); }
-  };
-  setTimeout(() => upcInput.focus(), 30);
-};
+// Add item manually: the same batch scan, From stock
+$('#btnAddStock').onclick = () => openBatchPutaway('', 'stock');
 
 // Manage locations
 $('#btnLocations').onclick = async () => {
