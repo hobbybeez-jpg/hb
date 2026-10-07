@@ -627,8 +627,11 @@ function stepCard(s, k) {
   const na = !done && s.renfrewNA && (k === '4b' || k === '5');
   const now = s.nextSteps.includes(k);
   let action = '';
-  if (now) {
-    const labels = { '2': 'Confirm Qty', '3': '🔒 Manager 1: Confirm Inventory', '4a': '🔒 Manager 2: Mark Listed', '4b': s.countedUnits ? 'Continue Count' : 'Start Count', '5': 'Scan to Store Shelf' };
+  if (now && k === '2') {
+    // Step 2 is done in the inventory system (Receiving page, "Qty Confirmed" button)
+    action = '<div class="small muted">Waiting for "Qty Confirmed" in the inventory system (Receiving page)</div>';
+  } else if (now) {
+    const labels = { '3': '🔒 Manager 1: Confirm Inventory', '4a': '🔒 Manager 2: Mark Listed', '4b': s.countedUnits ? 'Continue Count' : 'Start Count', '5': 'Scan to Store Shelf' };
     action = `<button class="btn ${k === '5' ? 'ok' : 'primary'} small" type="button" data-step="${k}">${labels[k]}</button>`;
     if (k === '5' && canReceive(state.detail)) action += receiveButton();
   }
@@ -769,10 +772,7 @@ async function doStep(step) {
   const s = state.detail.shipment;
   const id = s.shipmentId;
   try {
-    if (step === '2') {
-      if (!confirm(`Confirm that the quantities for "${s.supplier} ${s.name}" have been counted?`)) return;
-      state.detail = await api('completeStep', { shipmentId: id, step });
-    } else if (step === '3' || step === '4a') {
+    if (step === '3' || step === '4a') {
       const pw = await askPassword(step === '3' ? 'Manager 1: Confirm Inventory' : 'Manager 2: Listed Online', `${s.supplier} · ${s.name}`);
       if (pw == null) return;
       state.detail = await apiConfirm('completeStep', { shipmentId: id, step, password: pw });
