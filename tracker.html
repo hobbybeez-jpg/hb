@@ -214,8 +214,49 @@
   .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid #d4d4d4; border-top-color: var(--ink); border-radius: 50%; animation: sp .8s linear infinite; vertical-align: -2px; }
   @keyframes sp { to { transform: rotate(360deg); } }
 
+  /* Action tiles (Renfrew Stock): same size everywhere, square on phones */
+  .action-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 12px; }
+  .tile { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 92px;
+    padding: 10px 6px; border: 0; border-radius: var(--radius); background: #fff; box-shadow: var(--shadow); color: var(--ink-2);
+    font-size: 13px; font-weight: 600; line-height: 1.25; text-align: center; transition: box-shadow .12s, background .12s; }
+  .tile:hover { box-shadow: var(--shadow-hover); }
+  .tile:active { background: var(--hover); }
+  .tile:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .tile svg { flex: none; }
+  .tile .tile-sub { display: block; font-size: 11px; font-weight: 500; color: var(--muted); }
+  .tile.warn { background: var(--warn-soft); color: var(--warn); box-shadow: 0 0 0 1px #f5dd7a; }
+  .tile.pending { color: var(--pending); }
+  .tile.pending .tile-sub { color: #8f6bd9; }
+  .tile-badge { position: absolute; top: 8px; right: 8px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px;
+    background: var(--now); color: #1a1a1a; font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+  .tile-badge:empty { display: none; }
+
+  /* Shipment cards (phones) */
+  .ship-cards { flex-direction: column; gap: 10px; }
+  .ship-card { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px; display: flex; flex-direction: column; gap: 10px; cursor: pointer; }
+  .ship-card:active { background: var(--hover); }
+  .ship-card.done { opacity: .7; }
+  .ship-card .sc-name { font-weight: 650; font-size: 15px; overflow-wrap: anywhere; }
+  .ship-card .chev { color: var(--subtle); font-size: 22px; line-height: 1; }
+  .ship-card .progress { height: 10px; }
   @media (max-width: 760px) {
     main { padding: 12px; }
+    .action-grid { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .tile { min-height: 0; aspect-ratio: 1 / 1; font-size: 12.5px; }
+    .btn { min-height: 40px; }
+    .btn.small { min-height: 34px; }
+    .scanbox.stack-sm { flex-wrap: wrap; }
+    .scanbox.stack-sm input { flex: 1 1 100%; }
+    .scanbox.stack-sm .btn { flex: 1 1 0; }
+    .racks { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .rack { padding: 10px; }
+    #listToolbar #filterChips { display: flex; width: 100%; }
+    #listToolbar #filterChips .chip { flex: 1; padding: 7px 8px; }
+    #listToolbar #listFilter { max-width: none !important; flex: 1 1 0; min-width: 0; }
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+    .split label { justify-content: space-between; }
+    .split input.qty { width: 100%; }
+    .split select, .split .btn { grid-column: span 2; width: 100% !important; }
     .bar { padding: 10px 12px 4px; }
     .bar h1 .sub { display: none; }
     .ship-list { grid-template-columns: 1fr; }
@@ -257,7 +298,7 @@
   <!-- Shipments -->
   <section id="tab-list">
     <div id="listView">
-      <div class="row" style="margin-bottom:12px">
+      <div class="row" id="listToolbar" style="margin-bottom:12px">
         <div class="chips" id="filterChips">
           <button class="chip active" data-filter="open">In Progress</button>
           <button class="chip" data-filter="done">Completed</button>
@@ -275,7 +316,7 @@
   <section id="tab-search" class="hidden">
     <div class="card">
       <div class="small muted" style="margin-bottom:6px">Scan or type a UPC to see which shipments it belongs to (open shipments first) and where it is in Renfrew stock.</div>
-      <form class="scanbox" id="searchForm">
+      <form class="scanbox stack-sm" id="searchForm">
         <input class="inp" id="searchInput" inputmode="numeric" autocomplete="off" placeholder="UPC" />
         <button class="btn scan-btn" type="button" data-scan-for="searchInput">📷 Scan</button>
         <button class="btn primary" type="submit">Search</button>
@@ -286,16 +327,16 @@
 
   <!-- Renfrew stock -->
   <section id="tab-renfrew" class="hidden">
-    <div class="row" style="margin-bottom:12px">
-      <button class="btn warn" id="btnPutaway" type="button">To Put Away <span id="putCount"></span></button>
-      <button class="btn" id="btnBatch" type="button">Scan into Box</button>
-      <button class="btn" id="btnScanOut" type="button" style="border-color:var(--pending);color:var(--pending);font-weight:600">Scan Out of Pending (to store floor)</button>
-      <button class="btn" id="btnAddStock" type="button">+ Add Item Manually</button>
-      <button class="btn" id="btnLocations" type="button">Manage Locations</button>
-      <button class="btn" id="refreshMap" type="button">Refresh</button>
+    <div class="action-grid">
+      <button class="tile warn" id="btnPutaway" type="button"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8"/><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M10 12h4"/></svg><span>To Put Away</span><span class="tile-badge" id="putCount"></span></button>
+      <button class="tile" id="btnBatch" type="button"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M8 7v10M12 7v10M16 7v10"/></svg><span>Scan into Box</span></button>
+      <button class="tile pending" id="btnScanOut" type="button"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l1.5-5h15L21 9"/><path d="M4 9v11h16V9"/><path d="M9 20v-6h6v6"/><path d="M3 9h18"/></svg><span>Scan Out<span class="tile-sub">Pending → store floor</span></span></button>
+      <button class="tile" id="btnAddStock" type="button"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M12 8v8M8 12h8"/></svg><span>Add Item</span></button>
+      <button class="tile" id="btnLocations" type="button"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>Locations</span></button>
+      <button class="tile" id="refreshMap" type="button"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/></svg><span>Refresh</span></button>
     </div>
     <div class="card" style="margin-bottom:12px">
-      <form class="scanbox" id="mapFindForm">
+      <form class="scanbox stack-sm" id="mapFindForm">
         <input class="inp" id="mapFind" inputmode="numeric" autocomplete="off" placeholder="Scan UPC to find location" />
         <button class="btn scan-btn" type="button" data-scan-for="mapFind">📷 Scan</button>
         <button class="btn primary" type="submit">Find</button>
@@ -568,6 +609,7 @@ setInterval(idleSignOut, 60000);
 function setTab(tab) {
   state.tab = tab;
   $$('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  const active = $('#tabs button.active'); if (active) active.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   $$('main > section').forEach((s) => s.classList.toggle('hidden', s.id !== 'tab-' + tab));
   refreshCurrent();
   if (tab === 'search') setTimeout(() => $('#searchInput').focus(), 30);
@@ -626,7 +668,19 @@ function renderList() {
     box.innerHTML = `<div class="empty">${state.filter === 'open' ? 'No shipments in progress.' : 'Nothing here.'}</div>`;
     return;
   }
-  box.innerHTML = `<div class="table-wrap"><table class="grid ships"><thead><tr>
+  const next = (s) => s.done ? `<span class="tag ok">Completed ${fmtDate(s.steps['5'].at)}</span>` : s.nextSteps.map((k) => stepTag(s, k)).join(' ');
+  // Phones: one card per shipment; larger screens: the table
+  const cards = `<div class="ship-cards show-sm">${rows.map((s) => `
+    <div class="ship-card ${s.done ? 'done' : ''}" data-id="${esc(s.shipmentId)}" tabindex="0">
+      <div class="row" style="flex-wrap:nowrap;align-items:flex-start">
+        <div class="grow" style="min-width:0"><div class="sc-name">${esc(s.name)}</div>
+          <div class="small muted">${esc(s.supplier || '(no supplier)')} · ${fmtDate(s.createdAt)}</div></div>
+        <span class="chev" aria-hidden="true">›</span></div>
+      ${progressBar(s)}
+      <div class="row"><span class="row" style="gap:4px">${next(s)}</span><span class="grow"></span>
+        <span class="small muted nowrap">${s.receivedUnits}/${s.expectedUnits} recv${s.renfrewUnits ? ` · Renfrew ${s.countedUnits}/${s.renfrewUnits}` : ''}</span></div>
+    </div>`).join('')}</div>`;
+  box.innerHTML = cards + `<div class="table-wrap hide-sm"><table class="grid ships"><thead><tr>
       <th>Shipment</th><th>Supplier</th><th class="hide-sm">Created</th><th>Progress</th><th>Next Step</th><th class="hide-sm">Inventory</th><th class="num">Received</th><th></th>
     </tr></thead><tbody>${rows.map((s) => `
       <tr class="${s.done ? 'done' : ''}" data-id="${esc(s.shipmentId)}" tabindex="0">
@@ -634,14 +688,14 @@ function renderList() {
         <td>${esc(s.supplier || '(no supplier)')}</td>
         <td class="nowrap hide-sm">${fmtDate(s.createdAt)}</td>
         <td>${progressBar(s)}</td>
-        <td>${s.done ? `<span class="tag ok">Completed ${fmtDate(s.steps['5'].at)}</span>` : s.nextSteps.map((k) => stepTag(s, k)).join(' ')}</td>
+        <td>${next(s)}</td>
         <td class="hide-sm">${whTag(s)}</td>
         <td class="num nowrap">${s.receivedUnits}/${s.expectedUnits}<div class="alloc-sub">${s.lineCount} items${s.renfrewUnits ? ` · Renfrew ${s.countedUnits}/${s.renfrewUnits}` : ''}</div></td>
         <td><button class="btn small" type="button">Open</button></td>
       </tr>`).join('')}</tbody></table></div>`;
 }
-$('#shipList').addEventListener('click', (e) => { const r = e.target.closest('tr[data-id]'); if (r) openDetail(r.dataset.id); });
-$('#shipList').addEventListener('keydown', (e) => { const r = e.target.closest('tr[data-id]'); if (r && e.key === 'Enter') openDetail(r.dataset.id); });
+$('#shipList').addEventListener('click', (e) => { const r = e.target.closest('[data-id]'); if (r) openDetail(r.dataset.id); });
+$('#shipList').addEventListener('keydown', (e) => { const r = e.target.closest('[data-id]'); if (r && e.key === 'Enter') openDetail(r.dataset.id); });
 $('#listFilter').addEventListener('input', renderList);
 $('#refreshList').onclick = () => loadList();
 $$('#filterChips .chip').forEach((b) => (b.onclick = () => {
@@ -1123,7 +1177,7 @@ async function loadMap() {
 function renderPutBadge() {
   const n = state.map ? state.map.toPutaway.reduce((t, x) => t + x.remaining, 0) : 0;
   $('#putBadge').textContent = n; $('#putBadge').classList.toggle('hidden', !n);
-  $('#putCount').textContent = n ? `(${n})` : '';
+  $('#putCount').textContent = n ? String(n) : '';
 }
 function renderMap() {
   renderPutBadge();
