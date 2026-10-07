@@ -85,6 +85,12 @@
   .progress .branch span { flex: 1; background: var(--todo); border-radius: 2px; }
   .progress .done { background: var(--ok) !important; }
   .progress .now { background: var(--now) !important; }
+  .progress .na { background: #cfe8d6 !important; }
+  .step.na { background: #f4f6f8; border-style: dashed; }
+  .step.na .n { background: #cfd6de; }
+  .count-prog { font-size: 12px; color: var(--muted); }
+  .split { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .split label { font-size: 12px; color: var(--muted); display: flex; gap: 4px; align-items: center; }
   .next { font-size: 13px; }
 
   /* Detail */
@@ -275,7 +281,7 @@
           <select class="inp" id="pwKey">
             <option value="pw_step3">Manager 1: Inventory Confirmed (step 3)</option>
             <option value="pw_step4a">Manager 2: Listed Online (step 4a)</option>
-            <option value="pw_admin">Admin (undo steps)</option>
+            <option value="pw_admin">Admin (change passwords)</option>
             <option value="pw_access">Staff password (to open the app)</option>
           </select>
         </label>
@@ -475,20 +481,22 @@ function refreshCurrent() {
 }
 
 // ---------------- Shipment list ----------------
-function progressBar(steps) {
-  const cls = (k, now) => (steps[k] ? 'done' : now.includes(k) ? 'now' : '');
-  const now = nextOf(steps);
+function progressBar(s) {
+  const steps = s.steps; const now = s.nextSteps || [];
+  const isNA = (k) => s.renfrewNA && (k === '4b' || k === '5');
+  const cls = (k) => (steps[k] ? 'done' : isNA(k) ? 'na' : now.includes(k) ? 'now' : '');
   return `<div class="progress" title="1 Imported · 2 Qty Confirmed · top lane: 3 Inventory Confirmed → 4a Listed Online · bottom lane: 4b Renfrew Count · 5 On Store Shelf">
-    <div class="seg done"></div><div class="seg ${cls('2', now)}"></div>
-    <div class="branch"><div><span class="${cls('3', now)}"></span><span class="${cls('4a', now)}"></span></div>
-      <div><span class="${cls('4b', now)}"></span></div></div>
-    <div class="seg ${cls('5', now)}"></div></div>`;
+    <div class="seg done"></div><div class="seg ${cls('2')}"></div>
+    <div class="branch"><div><span class="${cls('3')}"></span><span class="${cls('4a')}"></span></div>
+      <div><span class="${cls('4b')}"></span></div></div>
+    <div class="seg ${cls('5')}"></div></div>`;
 }
-// Flow: 1 -> 2 -> two parallel lanes [3 -> 4a] and [4b] -> 5
-const PREREQ = { '2': [], '3': ['2'], '4a': ['3'], '4b': ['2'], '5': ['4a', '4b'] };
+// Flow: 1 -> 2 -> two parallel lanes [3 -> 4a] and [4b] -> 5; the server works out the next steps
 const LATER = { '2': ['3', '4b'], '3': ['4a'], '4a': ['5'], '4b': ['5'], '5': [] };
-function nextOf(steps) {
-  return ['2', '3', '4a', '4b', '5'].filter((k) => !steps[k] && PREREQ[k].every((p) => steps[p]));
+const PASSWORD_STEPS = { '3': 'Manager 1: Confirm Inventory', '4a': 'Manager 2: Listed Online' };
+function stepTag(s, k) {
+  const prog = k === '4b' && s.countedUnits ? ` (${s.countedUnits}/${s.renfrewUnits})` : '';
+  return `<span class="tag warn">${k} ${esc(STEP_LABELS[k])}${prog}</span>`;
 }
 function whTag(s) {
   if (s.whStatus === 'FINALIZED') return '<span class="tag ok">Inventory: Finalized</span>';
@@ -521,10 +529,10 @@ function renderList() {
         <td class="ship-name mono">${esc(s.name)}</td>
         <td>${esc(s.supplier || '(no supplier)')}</td>
         <td class="nowrap hide-sm">${fmtDate(s.createdAt)}</td>
-        <td>${progressBar(s.steps)}</td>
-        <td>${s.done ? `<span class="tag ok">Completed ${fmtDate(s.steps['5'].at)}</span>` : s.nextSteps.map((k) => `<span class="tag warn">${k} ${esc(STEP_LABELS[k])}</span>`).join(' ')}</td>
+        <td>${progressBar(s)}</td>
+        <td>${s.done ? `<span class="tag ok">Completed ${fmtDate(s.steps['5'].at)}</span>` : s.nextSteps.map((k) => stepTag(s, k)).join(' ')}</td>
         <td class="hide-sm">${whTag(s)}</td>
-        <td class="num nowrap">${s.receivedUnits}/${s.expectedUnits}<div class="alloc-sub">${s.lineCount} items${s.renfrewUnits ? ` · Renfrew ${s.renfrewUnits}` : ''}</div></td>
+        <td class="num nowrap">${s.receivedUnits}/${s.expectedUnits}<div class="alloc-sub">${s.lineCount} items${s.renfrewUnits ? ` · Renfrew ${s.countedUnits}/${s.renfrewUnits}` : ''}</div></td>
         <td><button class="btn small" type="button">Open</button></td>
       </tr>`).join('')}</tbody></table></div>`;
 }
@@ -567,22 +575,28 @@ async function loadDetail(id) {
 
 function stepCard(s, k) {
   const done = s.steps[k];
+  const na = !done && s.renfrewNA && (k === '4b' || k === '5');
   const now = s.nextSteps.includes(k);
   let action = '';
   if (now) {
-    const labels = { '2': 'Confirm Qty', '3': '🔒 Manager 1: Confirm Inventory', '4a': '🔒 Manager 2: Mark Listed', '4b': 'Start Count', '5': 'Scan to Store Shelf' };
+    const labels = { '2': 'Confirm Qty', '3': '🔒 Manager 1: Confirm Inventory', '4a': '🔒 Manager 2: Mark Listed', '4b': s.countedUnits ? 'Continue Count' : 'Start Count', '5': 'Scan to Store Shelf' };
     action = `<button class="btn ${k === '5' ? 'ok' : 'primary'} small" type="button" data-step="${k}">${labels[k]}</button>`;
   }
   const undo = done && k !== '1' && canUndo(s, k) ? ` · <button class="link" type="button" data-undo="${k}">Undo</button>` : '';
-  return `<div class="step ${done ? 'done' : now ? 'now' : ''}">
+  const prog = k === '4b' && s.renfrewUnits ? `<div class="count-prog">${s.countedUnits}/${s.renfrewUnits} pcs counted</div>` : '';
+  return `<div class="step ${done ? 'done' : na ? 'na' : now ? 'now' : ''}">
     <div class="t"><span class="n">${k}</span>${STEP_LABELS[k]}</div>
-    <div class="who">${done ? `${esc(done.by || STEP_WHO[k])} · ${fmtTime(done.at)}${undo}` : STEP_WHO[k]}</div>
+    <div class="who">${done ? `${esc(done.by || STEP_WHO[k])} · ${fmtTime(done.at)}${undo}` : na ? 'Not needed — no Renfrew items' : STEP_WHO[k]}</div>
+    ${prog}
     ${k === '4b' && s.s4bNote ? `<div class="small">Note: ${esc(s.s4bNote)}</div>` : ''}
     ${k === '5' && s.s5Note ? `<div class="small">Note: ${esc(s.s5Note)}</div>` : ''}
     ${action}</div>`;
 }
 function canUndo(s, k) {
-  return LATER[k] && !LATER[k].some((x) => s.steps[x]);
+  // Steps skipped automatically (no Renfrew items) are undone together with 4a
+  if (s.steps[k] && s.steps[k].by === 'System') return false;
+  const auto = (x) => k === '4a' && x === '5' && s.steps['5'] && s.steps['5'].by === 'System';
+  return LATER[k] && !LATER[k].some((x) => s.steps[x] && !auto(x));
 }
 
 function allocCell(main, sub) {
@@ -632,16 +646,20 @@ function renderDetail() {
     </div>
 
     ${d.checks.length || d.stock.length ? `
-    <div class="section-title">Renfrew Put-away
+    <div class="section-title">Renfrew Count &amp; Put-away
+      ${s.renfrewUnits ? `<span class="tag">${s.countedUnits}/${s.renfrewUnits} counted</span>` : ''}
+      ${s.nextSteps.includes('4b') ? `<button class="btn small primary" type="button" id="goCount">${s.countedUnits ? 'Continue count' : 'Count'}</button>` : ''}
       ${unput > 0 ? `<span class="tag warn">Not put away ${unput}</span><button class="btn small warn" type="button" id="goPutaway">Put away</button>` : ''}
       ${pendingStock.length ? `<span class="tag pending">Pending ${pendingStock.reduce((n, x) => n + x.qty, 0)}</span>` : ''}
     </div>
+    ${d.checks.some((c) => c.changed) ? '<div class="note-box" style="margin-bottom:8px">The inventory system changed the Renfrew quantity after this count was completed (see "Inventory now").</div>' : ''}
     <div class="table-wrap"><table class="grid">
       <thead><tr><th>Product</th><th>UPC</th><th class="num">Expected</th><th class="num">Counted</th><th class="num">Put away</th><th>Location</th></tr></thead>
       <tbody>${d.checks.map((c) => {
         const locs = d.stock.filter((x) => upcEq(x.upc, c.upc));
+        const counted = c.countedQty === c.expectedQty ? `<span class="tag ok">${c.countedQty}</span>` : c.countedQty > c.expectedQty ? `<span class="tag bad">${c.countedQty}</span>` : c.countedQty ? `<span class="tag warn">${c.countedQty}</span>` : '0';
         return `<tr class="${hl && upcEq(c.upc, hl) ? 'hit' : ''}"><td>${esc(c.productName)}</td><td class="mono">${esc(c.upc)}</td>
-          <td class="num">${c.expectedQty}</td><td class="num">${c.countedQty !== c.expectedQty ? `<span class="tag bad">${c.countedQty}</span>` : c.countedQty}</td>
+          <td class="num">${c.expectedQty}${c.changed ? `<div><span class="tag bad">Inventory now ${c.inventoryQty}</span></div>` : ''}</td><td class="num">${counted}</td>
           <td class="num">${c.putQty}</td>
           <td>${locs.map((x) => `<span class="tag ${x.locationCode === 'PENDING' ? 'pending' : ''}">${esc(x.locationCode)} × ${x.qty}</span>`).join(' ') || '<span class="muted small">—</span>'}</td></tr>`;
       }).join('')}</tbody></table></div>` : ''}
@@ -672,12 +690,13 @@ function renderDetail() {
 
     <div class="section-title">Step History</div>
     <div class="card small">${d.events.length ? d.events.map((e) => `<div>${fmtTime(e.at)} · <b>${esc(e.by)}</b> ·
-      ${e.action === 'UNDO' ? '<span class="tag bad">Undone</span>' : e.action === 'DONE_FORCED' ? '<span class="tag warn">Done (warning skipped)</span>' : '<span class="tag ok">Done</span>'}
+      ${e.action === 'UNDO' ? '<span class="tag bad">Undone</span>' : e.action === 'DONE_FORCED' ? '<span class="tag warn">Done (warning skipped)</span>' : e.action === 'AUTO' ? '<span class="tag">Not needed</span>' : '<span class="tag ok">Done</span>'}
       ${esc(e.step)} ${esc(STEP_LABELS[e.step] || '')}${e.note ? ' · ' + esc(e.note) : ''}</div>`).join('') : '<span class="muted">No history yet</span>'}</div>`;
 
   $('#backBtn').onclick = closeDetail;
   $('#reloadDetail').onclick = () => loadDetail(s.shipmentId);
   const gp = $('#goPutaway'); if (gp) gp.onclick = () => openPutaway(s.shipmentId);
+  const gc = $('#goCount'); if (gc) gc.onclick = () => openCount();
   const lf = $('#lineFilter');
   const applyFilter = () => {
     const q = lf.value.trim().toLowerCase();
@@ -712,8 +731,11 @@ async function doStep(step) {
 
 async function undoStep(step) {
   const s = state.detail.shipment;
-  const pw = await askPassword(`Undo step ${step} "${STEP_LABELS[step]}"`, 'Manager password required');
-  if (pw == null) return;
+  let pw = '';
+  if (PASSWORD_STEPS[step]) {
+    pw = await askPassword(`Undo step ${step} "${STEP_LABELS[step]}"`, `${PASSWORD_STEPS[step].split(':')[0]} password required`);
+    if (pw == null) return;
+  } else if (!confirm(`Undo step ${step} "${STEP_LABELS[step]}"?`)) return;
   const note = prompt('Reason for undo (optional)') || '';
   try {
     state.detail = await api('undoStep', { shipmentId: s.shipmentId, step, password: pw, note });
@@ -722,82 +744,87 @@ async function undoStep(step) {
   } catch (e) { toast(e.message, 'bad'); }
 }
 
-// ----- Step 4b: Renfrew count -----
+// ----- Step 4b: Renfrew count (every scan / typed number is saved right away) -----
 function openCount() {
-  const d = state.detail; const s = d.shipment;
-  const lines = d.lines.filter((l) => l.renfrewQty > 0);
-  const counts = {};
-  lines.forEach((l) => (counts[l.lineId] = ''));
+  const s0 = state.detail.shipment;
+  const id = s0.shipmentId;
   const body = document.createElement('div');
   body.className = 'list';
-  body.innerHTML = lines.length ? `
-    <div class="small muted">Scan each item: every scan adds 1. You can also type the quantity.</div>
-    <form class="scanbox" id="countScan"><input class="inp" inputmode="numeric" autocomplete="off" placeholder="Scan UPC" />
-      <button class="btn scan-btn" type="button" data-continuous="1">📷</button></form>
-    <div class="row"><button class="btn small" type="button" id="allMatch">All match expected</button><span class="grow"></span><span class="small" id="countSummary"></span></div>
-    <div class="list" id="countList">${lines.map((l) => `
-      <div class="item" data-line="${esc(l.lineId)}">
-        <div class="nm"><b>${esc(l.productName)}</b><span class="mono muted">${esc(l.upc)}</span></div>
-        <div class="small">Expected <b>${l.renfrewQty}</b></div>
-        <input class="inp qty" type="number" min="0" inputmode="numeric" placeholder="Count" />
-      </div>`).join('')}</div>
-    <label class="f">Note (required if quantities don't match)<textarea class="inp" id="countNote" rows="2"></textarea></label>`
-    : '<div class="note-box">This shipment has no items for Renfrew. Confirm to complete step 4b.</div><label class="f">Note (optional)<textarea class="inp" id="countNote" rows="2"></textarea></label>';
-  const m = modal({ title: `4b Renfrew Count · ${s.supplier} ${s.name}`, body,
-    foot: '<button class="btn" type="button" data-a="cancel">Cancel</button><button class="btn primary" type="button" data-a="ok">Count OK, complete 4b</button>' });
-  const summary = () => {
-    const el = $('#countSummary', body); if (!el) return;
-    let ok = 0, bad = 0, empty = 0;
-    lines.forEach((l) => { const v = counts[l.lineId]; if (v === '') empty++; else if (Number(v) === l.renfrewQty) ok++; else bad++; });
-    el.innerHTML = `<span class="tag ok">Match ${ok}</span> <span class="tag bad">Mismatch ${bad}</span> <span class="tag">Not counted ${empty}</span>`;
+  const m = modal({ title: `4b Renfrew Count · ${s0.supplier} ${s0.name}`, body,
+    foot: '<button class="btn" type="button" data-a="close">Close (saved)</button><button class="btn primary" type="button" data-a="ok">Complete 4b</button>',
+    onClose: () => { if (state.detailId === id) loadDetail(id); } });
+  let queue = Promise.resolve();
+  let finished = false;
+  const after = (r, flashLine) => {
+    state.detail = r;
+    if (r.completed) return done('All items counted — 4b complete');
+    render(flashLine);
+  };
+  const done = (message) => {
+    finished = true;
+    toast(message, 'ok');
+    m.close();
+    const unput = state.detail.checks.reduce((n, c) => n + c.countedQty - c.putQty, 0);
+    if (unput) openPutaway(id);
+  };
+  const render = (flashLine) => {
+    const checks = state.detail.checks;
+    const expected = checks.reduce((n, c) => n + c.expectedQty, 0);
+    const counted = checks.reduce((n, c) => n + c.countedQty, 0);
+    const ok = checks.filter((c) => c.countedQty === c.expectedQty).length;
+    const over = checks.filter((c) => c.countedQty > c.expectedQty).length;
+    const note = $('#countNote', body) ? $('#countNote', body).value : '';
+    body.innerHTML = `
+      <div class="small muted">Scan each item: every scan adds 1 and is saved right away. You can stop and continue later, or type a number.</div>
+      <form class="scanbox" id="countScan"><input class="inp" inputmode="numeric" autocomplete="off" placeholder="Scan UPC" />
+        <button class="btn scan-btn" type="button">📷</button></form>
+      <div class="row"><b>${counted}/${expected} pcs</b><span class="tag ok">Match ${ok}</span>${over ? `<span class="tag bad">Over ${over}</span>` : ''}<span class="tag">Open ${checks.length - ok - over}</span>
+        <span class="grow"></span><button class="btn small" type="button" id="allMatch">All match expected</button></div>
+      <div class="list" id="countList">${checks.map((c) => `
+        <div class="item" data-line="${esc(c.lineId)}" style="border-color:${c.countedQty === c.expectedQty ? '#7cc995' : c.countedQty > c.expectedQty ? '#f0a0a0' : c.countedQty ? '#f0c060' : ''}">
+          <div class="nm"><b>${esc(c.productName)}</b><span class="mono muted">${esc(c.upc)}</span>${c.putQty ? `<div class="small muted">${c.putQty} put away</div>` : ''}</div>
+          <div class="small">Expected <b>${c.expectedQty}</b></div>
+          <input class="inp qty" type="number" min="${c.putQty}" inputmode="numeric" value="${c.countedQty}" />
+        </div>`).join('')}</div>
+      <label class="f">Note (required to complete when quantities don't match, e.g. short shipment)<textarea class="inp" id="countNote" rows="2">${esc(note)}</textarea></label>`;
+    const form = $('#countScan', body); const input = $('input', form);
+    form.onsubmit = (e) => { e.preventDefault(); const v = input.value.trim(); input.value = ''; if (v) scan(v); };
+    $('.scan-btn', form).onclick = () => openScanner((code) => scan(code), { continuous: true });
+    $('#allMatch', body).onclick = () => save(checks.map((c) => ({ lineId: c.lineId, counted: c.expectedQty })));
     $$('#countList .item', body).forEach((it) => {
-      const l = lines.find((x) => x.lineId === it.dataset.line); const v = counts[l.lineId];
-      it.style.borderColor = v === '' ? '' : Number(v) === l.renfrewQty ? '#7cc995' : '#f0a0a0';
+      const field = $('input', it);
+      field.onchange = () => save([{ lineId: it.dataset.line, counted: Math.max(0, parseInt(field.value, 10) || 0) }]);
     });
-  };
-  $$('#countList .item', body).forEach((it) => {
-    const input = $('input', it);
-    input.oninput = () => { counts[it.dataset.line] = input.value === '' ? '' : String(Math.max(0, parseInt(input.value, 10) || 0)); summary(); };
-  });
-  const bump = (code) => {
-    const matches = lines.filter((l) => upcEq(l.upc, code));
-    if (!matches.length) { beep(false); toast(`This UPC is not on the Renfrew list: ${code}`, 'bad'); return false; }
-    // When several lines share a UPC, fill the first one up first
-    const l = matches.find((x) => (Number(counts[x.lineId]) || 0) < x.renfrewQty) || matches[matches.length - 1];
-    counts[l.lineId] = String((Number(counts[l.lineId]) || 0) + 1);
-    const it = $(`#countList .item[data-line="${CSS.escape(l.lineId)}"]`, body);
-    $('input', it).value = counts[l.lineId];
-    it.classList.remove('flash'); void it.offsetWidth; it.classList.add('flash');
-    it.scrollIntoView({ block: 'nearest' });
-    beep(true); summary();
-    return true;
-  };
-  const scanForm = $('#countScan', body);
-  if (scanForm) {
-    const input = $('input', scanForm);
-    scanForm.onsubmit = (e) => { e.preventDefault(); const v = input.value.trim(); input.value = ''; if (v) bump(v); };
-    $('.scan-btn', scanForm).onclick = () => openScanner((code) => bump(code), { continuous: true });
-    $('#allMatch', body).onclick = () => { lines.forEach((l) => { counts[l.lineId] = String(l.renfrewQty); $(`#countList .item[data-line="${CSS.escape(l.lineId)}"] input`, body).value = l.renfrewQty; }); summary(); };
-    summary();
+    if (flashLine) {
+      const it = $(`#countList .item[data-line="${CSS.escape(flashLine)}"]`, body);
+      if (it) { it.classList.add('flash'); it.scrollIntoView({ block: 'nearest' }); }
+    }
     setTimeout(() => input.focus(), 30);
-  }
-  $('[data-a=cancel]', m.foot).onclick = m.close;
-  $('[data-a=ok]', m.foot).onclick = async (e) => {
-    const missing = lines.filter((l) => counts[l.lineId] === '');
-    if (missing.length) { toast(`${missing.length} item(s) still have no count`, 'bad'); return; }
-    e.target.disabled = true;
-    try {
-      state.detail = await api('completeStep', {
-        shipmentId: s.shipmentId, step: '4b', note: $('#countNote', body).value,
-        counts: lines.map((l) => ({ lineId: l.lineId, counted: Number(counts[l.lineId]) }))
-      });
-      m.close();
-      renderDetail();
-      const unput = state.detail.checks.reduce((n, c) => n + c.countedQty - c.putQty, 0);
-      toast('4b count done' + (unput ? ' — now put the items away' : ''), 'ok');
-      if (unput) openPutaway(s.shipmentId);
-    } catch (err) { toast(err.message, 'bad'); e.target.disabled = false; }
   };
+  // Scans are sent one at a time so fast scanners keep their order
+  const scan = (code) => (queue = queue.then(async () => {
+    if (finished) return;
+    try {
+      const r = await api('countScan', { shipmentId: id, upc: code });
+      beep(true);
+      after(r, r.scanned.lineId);
+    } catch (e) { beep(false); toast(e.message, 'bad'); }
+  }));
+  const save = (counts) => (queue = queue.then(async () => {
+    if (finished) return;
+    try { after(await api('setCounts', { shipmentId: id, counts })); } catch (e) { toast(e.message, 'bad'); render(); }
+  }));
+  $('[data-a=close]', m.foot).onclick = m.close;
+  $('[data-a=ok]', m.foot).onclick = () => (queue = queue.then(async () => {
+    try {
+      state.detail = await api('completeStep', { shipmentId: id, step: '4b', note: $('#countNote', body).value });
+      done('4b count complete');
+    } catch (e) {
+      toast(e.code === 'NEED_NOTE' ? e.message + ' (for a short shipment, explain what is missing)' : e.message, 'bad');
+      if (e.code === 'NEED_NOTE') $('#countNote', body).focus();
+    }
+  }));
+  render();
 }
 
 // ----- Step 5: scan Pending items onto the store floor -----
@@ -864,15 +891,15 @@ async function runSearch(upc) {
     const card = (s) => `<div class="card ship ${s.done ? 'done' : ''}" data-id="${esc(s.shipmentId)}" tabindex="0">
       <div class="row"><span class="sup">${esc(s.supplier)}</span><span class="num">${esc(s.name)}</span><span class="grow"></span>${whTag(s)}</div>
       <div class="small muted">Created ${fmtDate(s.createdAt)}</div>
-      ${progressBar(s.steps)}
-      <div class="row small">${s.done ? '<span class="tag ok">Completed</span>' : `Next: <b>${s.nextSteps.map((k) => `${k} ${STEP_LABELS[k]}`).join(', ')}</b>`}</div>
+      ${progressBar(s)}
+      <div class="row small">${s.done ? '<span class="tag ok">Completed</span>' : `Next: ${s.nextSteps.map((k) => stepTag(s, k)).join(' ')}`}</div>
       <div class="row small">Qty <b>${s.line.expectedQty}</b> (received ${s.line.receivedQty}) · PO <b>${s.line.poQty}</b> · MARINE <b>${s.line.marineQty}</b> · RENFREW <b>${s.line.renfrewQty}</b></div>
     </div>`;
     box.innerHTML = `
       <div class="section-title">${esc(r.productName || '(product name not found)')} <span class="mono muted">${esc(r.upc)}</span></div>
       ${r.toPutaway.length ? `<div class="note-box" style="margin-bottom:8px">Renfrew to put away: ${r.toPutaway.map((t) => `${esc(shipLabel(t.shipment))} × ${t.remaining}`).join(', ')}</div>` : ''}
       ${r.stock.length ? `<div class="card" style="margin-bottom:10px"><b>Renfrew stock locations</b><div class="row" style="margin-top:6px">${r.stock.map((x) =>
-        `<span class="tag ${x.locationCode === 'PENDING' ? 'pending' : ''}" style="font-size:14px">${esc(x.locationCode)} × ${x.qty}${x.shipment ? ` · ${esc(x.shipment.name)}` : ''}</span>`).join('')}</div></div>` : ''}
+        `<span class="tag ${x.locationCode === 'PENDING' ? 'pending' : ''}" style="font-size:14px">${esc(x.locationCode)} × ${x.qty}</span>`).join('')}</div></div>` : ''}
       ${open.length ? `<div class="section-title">Open shipments (${open.length})</div><div class="ship-list">${open.map(card).join('')}</div>` : ''}
       ${done.length ? `<div class="section-title">Completed (${done.length})</div><div class="ship-list">${done.map(card).join('')}</div>` : ''}
       ${!r.shipments.length ? '<div class="empty">This UPC is not in any tracked shipment.</div>' : ''}`;
@@ -882,9 +909,10 @@ async function runSearch(upc) {
 
 // ---------------- Renfrew stock ----------------
 function allCells() { return state.map ? state.map.racks.flatMap((r) => r.cells) : []; }
-function locationOptions(selected) {
-  return (state.map ? state.map.racks : []).flatMap((r) => r.cells.map((c) =>
-    `<option value="${esc(c.code)}" ${c.code === selected ? 'selected' : ''}>${esc(c.code)} · ${esc(r.name || r.rack)}${c.code === 'PENDING' ? ' (holding)' : ''}</option>`)).join('');
+function locationOptions(selected, { noPending = false, placeholder = '' } = {}) {
+  return (placeholder ? `<option value="">${esc(placeholder)}</option>` : '') +
+    (state.map ? state.map.racks : []).filter((r) => !noPending || r.rack !== 'PENDING').flatMap((r) => r.cells.map((c) =>
+      `<option value="${esc(c.code)}" ${c.code === selected ? 'selected' : ''}>${esc(c.code)} · ${esc(r.name || r.rack)}${c.code === 'PENDING' ? ' (holding)' : ''}</option>`)).join('');
 }
 async function ensureMap() { if (!state.map) state.map = await api('renfrewMap'); return state.map; }
 
@@ -918,16 +946,16 @@ function renderCellPanel() {
   if (!cell) { box.innerHTML = ''; return; }
   box.innerHTML = `<div class="section-title">${esc(cell.code)} <span class="small muted">${cell.items.length} SKU · ${cell.totalQty} pcs</span>
       <span class="grow"></span><button class="btn small" type="button" id="closeCell">Close</button></div>
-    <div class="list">${cell.items.map((x) => `<div class="item ${state.findUpc && upcEq(x.upc, state.findUpc) ? 'flash' : ''}">
+    <div class="list">${cell.items.map((x, i) => `<div class="item ${state.findUpc && upcEq(x.upc, state.findUpc) ? 'flash' : ''}">
       <div class="nm"><b>${esc(x.productName || '(no name)')}</b><span class="mono muted">${esc(x.upc)}</span>
-        <div class="small muted">${x.shipment ? esc(shipLabel(x.shipment)) : 'Manual add'} · ${fmtTime(x.updatedAt)}</div></div>
+        <div class="small muted">${x.sources.map((src) => `${src.shipment ? esc(shipLabel(src.shipment)) : 'Manual add'}${x.sources.length > 1 ? ` × ${src.qty}` : ''}`).join(' · ')} · ${fmtTime(x.updatedAt)}</div></div>
       <b style="font-size:18px">× ${x.qty}</b>
-      <button class="btn small" type="button" data-move="${esc(x.id)}">Move</button>
-      <button class="btn small" type="button" data-remove="${esc(x.id)}">Remove</button>
+      <button class="btn small" type="button" data-move="${i}">Move</button>
+      <button class="btn small" type="button" data-remove="${i}">Remove</button>
     </div>`).join('') || '<div class="empty">This location is empty.</div>'}</div>`;
   $('#closeCell').onclick = () => { state.selectedCell = ''; renderMap(); };
-  $$('[data-move]', box).forEach((b) => (b.onclick = () => openMove(cell.items.find((x) => x.id === b.dataset.move))));
-  $$('[data-remove]', box).forEach((b) => (b.onclick = () => openRemove(cell.items.find((x) => x.id === b.dataset.remove))));
+  $$('[data-move]', box).forEach((b) => (b.onclick = () => openMove(cell.items[Number(b.dataset.move)])));
+  $$('[data-remove]', box).forEach((b) => (b.onclick = () => openRemove(cell.items[Number(b.dataset.remove)])));
   box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
@@ -940,7 +968,7 @@ function openMove(item) {
   $('[data-a=cancel]', m.foot).onclick = m.close;
   $('[data-a=ok]', m.foot).onclick = async () => {
     try {
-      state.map = await api('renfrewMove', { stockId: item.id, toCode: $('#mvTo', m.body).value, qty: Number($('#mvQty', m.body).value) });
+      state.map = await api('renfrewMove', { locationCode: item.locationCode, upc: item.upc, toCode: $('#mvTo', m.body).value, qty: Number($('#mvQty', m.body).value) });
       m.close(); toast('Moved', 'ok'); renderMap();
     } catch (e) { toast(e.message, 'bad'); }
   };
@@ -955,7 +983,7 @@ function openRemove(item) {
   $('[data-a=cancel]', m.foot).onclick = m.close;
   $('[data-a=ok]', m.foot).onclick = async () => {
     try {
-      state.map = await api('renfrewRemove', { stockId: item.id, qty: Number($('#rmQty', m.body).value), reason: $('#rmReason', m.body).value, note: $('#rmNote', m.body).value });
+      state.map = await api('renfrewRemove', { locationCode: item.locationCode, upc: item.upc, qty: Number($('#rmQty', m.body).value), reason: $('#rmReason', m.body).value, note: $('#rmNote', m.body).value });
       m.close(); toast('Removed', 'ok'); renderMap();
     } catch (e) { toast(e.message, 'bad'); }
   };
@@ -981,14 +1009,16 @@ async function openPutaway(onlyShipmentId) {
       ${Object.entries(groups).map(([sid, items]) => `
         <div class="card" data-group="${esc(sid)}">
           <div class="row" style="margin-bottom:8px"><b>${esc(shipLabel(items[0].shipment))}</b><span class="grow"></span>
-            <select class="inp" style="width:auto" data-allto>${locationOptions('PENDING')}</select>
-            <button class="btn small warn" type="button" data-putall>Put all here</button></div>
-          <div class="list">${items.map((x) => `<div class="item" data-line="${esc(x.lineId)}" data-upc="${esc(x.upc)}">
-            <div class="nm"><b>${esc(x.productName)}</b><span class="mono muted">${esc(x.upc)}</span></div>
-            <span class="small">Left <b>${x.remaining}</b></span>
-            <select class="inp" style="width:auto" data-loc>${locationOptions('PENDING')}</select>
-            <input class="inp qty" type="number" min="1" max="${x.remaining}" value="${x.remaining}" data-qty />
-            <button class="btn small primary" type="button" data-put>Put away</button></div>`).join('')}</div>
+            <select class="inp" style="width:auto" data-allto>${locationOptions('', { noPending: true, placeholder: 'Set box for all…' })}</select>
+            <button class="btn small warn" type="button" data-putall>Put all away</button></div>
+          <div class="list">${items.map((x) => `<div class="item" data-line="${esc(x.lineId)}" data-upc="${esc(x.upc)}" data-left="${x.remaining}">
+            <div class="nm"><b>${esc(x.productName)}</b><span class="mono muted">${esc(x.upc)}</span><div class="small">Left <strong>${x.remaining}</strong></div></div>
+            <div class="split">
+              <label><span class="tag pending">Pending</span><input class="inp qty" type="number" min="0" max="${x.remaining}" value="${x.suggestPending}" data-pq /></label>
+              <label>Box<input class="inp qty" type="number" min="0" max="${x.remaining}" value="${x.remaining - x.suggestPending}" data-bq /></label>
+              <select class="inp" style="width:auto" data-loc>${locationOptions(x.suggestLocation, { noPending: true, placeholder: 'Choose box…' })}</select>
+              <button class="btn small primary" type="button" data-put>Put away</button>
+            </div></div>`).join('')}</div>
         </div>`).join('') || '<div class="empty">✅ Nothing left to put away.</div>'}`;
     const form = $('#putScan', body); const input = $('input', form);
     const find = (code) => {
@@ -1000,14 +1030,37 @@ async function openPutaway(onlyShipmentId) {
     form.onsubmit = (e) => { e.preventDefault(); const v = input.value.trim(); input.value = ''; if (v) find(v); };
     $('.scan-btn', form).onclick = () => openScanner(find);
     const all = $('#putAll', body); if (all) all.onclick = () => { filterShip = ''; render(); };
+    // One row -> up to two put-aways: the Pending part and the box part
+    const rowItems = (it, sid) => {
+      const pq = Math.max(0, parseInt($('[data-pq]', it).value, 10) || 0);
+      const bq = Math.max(0, parseInt($('[data-bq]', it).value, 10) || 0);
+      const name = $('.nm b', it).textContent;
+      if (pq + bq > Number(it.dataset.left)) throw new Error(`${name}: only ${it.dataset.left} left to put away.`);
+      if (bq && !$('[data-loc]', it).value) throw new Error(`${name}: choose a box.`);
+      const out = [];
+      if (pq) out.push({ shipmentId: sid, lineId: it.dataset.line, locationCode: 'PENDING', qty: pq });
+      if (bq) out.push({ shipmentId: sid, lineId: it.dataset.line, locationCode: $('[data-loc]', it).value, qty: bq });
+      return out;
+    };
     $$('[data-put]', body).forEach((b) => (b.onclick = async () => {
-      const it = b.closest('.item'); const sid = b.closest('[data-group]').dataset.group;
-      await put([{ shipmentId: sid, lineId: it.dataset.line, locationCode: $('[data-loc]', it).value, qty: Number($('[data-qty]', it).value) }]);
+      const it = b.closest('.item');
+      try {
+        const items = rowItems(it, b.closest('[data-group]').dataset.group);
+        if (!items.length) throw new Error('Enter a quantity.');
+        await put(items);
+      } catch (e) { toast(e.message, 'bad'); }
+    }));
+    $$('[data-allto]', body).forEach((sel) => (sel.onchange = () => {
+      if (sel.value) $$('[data-loc]', sel.closest('[data-group]')).forEach((x) => (x.value = sel.value));
     }));
     $$('[data-putall]', body).forEach((b) => (b.onclick = async () => {
-      const g = b.closest('[data-group]'); const to = $('[data-allto]', g).value;
-      const items = $$('.item', g).map((it) => ({ shipmentId: g.dataset.group, lineId: it.dataset.line, locationCode: to, qty: Number($('[data-qty]', it).max) }));
-      if (confirm(`Put the remaining ${items.reduce((n, x) => n + x.qty, 0)} unit(s) of this shipment into ${to}?`)) await put(items);
+      const g = b.closest('[data-group]');
+      try {
+        const items = $$('.item', g).flatMap((it) => rowItems(it, g.dataset.group));
+        if (!items.length) throw new Error('Nothing to put away.');
+        const pend = items.filter((x) => x.locationCode === 'PENDING').reduce((n, x) => n + x.qty, 0);
+        if (confirm(`Put away ${items.reduce((n, x) => n + x.qty, 0)} unit(s): ${pend} to Pending, the rest to the chosen boxes?`)) await put(items);
+      } catch (e) { toast(e.message, 'bad'); }
     }));
     setTimeout(() => input.focus(), 30);
   };

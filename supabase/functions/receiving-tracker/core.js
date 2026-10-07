@@ -16,6 +16,9 @@ export const STEP_LABELS = {
   '5': 'On Store Shelf'
 };
 const STEP_COL = { '2': 's2', '3': 's3', '4a': 's4a', '4b': 's4b', '5': 's5' };
+// Only these steps (and their undo) need a password
+const STEP_PASSWORD = { '3': ['pw_step3', 'Manager 1 (Inventory Confirmed)'], '4a': ['pw_step4a', 'Manager 2 (Listed Online)'] };
+const SYSTEM_USER = 'System';
 const PENDING = 'PENDING';
 const PASSWORD_KEYS = ['pw_access', 'pw_step3', 'pw_step4a', 'pw_admin'];
 const REMOVE_REASONS = { TO_STORE: 'To store floor', SOLD: 'Sold', DAMAGED: 'Damaged', ADJUST: 'Qty adjustment', OTHER: 'Other' };
@@ -50,6 +53,8 @@ function cleanText(value, max) {
 function cleanUpc(value) {
   return String(value == null ? '' : value).replace(/\s+/g, '').slice(0, 40);
 }
+
+const sameUpc = (a, b) => String(a || '').replace(/^0+/, '') === String(b || '').replace(/^0+/, '');
 
 function wholeNumber(value, label, { min = 0 } = {}) {
   const n = Number(value);
@@ -127,11 +132,22 @@ async function ensureShipment(tx, shipmentId) {
   return added.length ? { ignored: false } : null;
 }
 
-const SHIPMENT_COLUMNS = `
+// Renfrew units per shipment = the larger of plan and actual RENFREW allocation, line by line
+function shipmentColumns(wh) {
+  const renfrewUnits = wh
+    ? `(select coalesce(sum(greatest(coalesce(l.required_renfrew_qty, 0), coalesce(ra.q, 0))), 0)
+        from wh.shipment_lines l
+        left join lateral (select sum(a.qty) as q from wh.allocations a where a.shipment_line_id = l.line_id and a.type = 'RENFREW') ra on true
+        where l.shipment_id = t.shipment_id)`
+    : '0';
+  return `
   t.shipment_id, coalesce(s.supplier, t.supplier) as supplier, coalesce(s.name, t.name) as name,
   coalesce(s.created_at, t.created_at) as created_at, s.status as wh_status, s.finalized_at as wh_finalized_at,
   (s.shipment_id is null) as wh_missing,
-  t.s2_at, t.s2_by, t.s3_at, t.s3_by, t.s4a_at, t.s4a_by, t.s4b_at, t.s4b_by, t.s4b_note, t.s5_at, t.s5_by, t.s5_note`;
+  t.s2_at, t.s2_by, t.s3_at, t.s3_by, t.s4a_at, t.s4a_by, t.s4b_at, t.s4b_by, t.s4b_note, t.s5_at, t.s5_by, t.s5_note,
+  ${renfrewUnits} as renfrew_units,
+  (select coalesce(sum(c.counted_qty), 0) from trk.renfrew_checks c where c.shipment_id = t.shipment_id) as counted_units`;
+}
 
 // Some inventory shipments have no name; fall back to the part of shipment_id after '|'
 function displayName(name, shipmentId) {
@@ -146,6 +162,9 @@ function shipmentOut(row) {
     const col = STEP_COL[step];
     steps[step] = row[col + '_at'] ? { at: row[col + '_at'], by: row[col + '_by'] || '' } : null;
   }
+  const renfrewUnits = Number(row.renfrew_units || 0);
+  // Nothing goes to Renfrew: 4b and 5 are not needed
+  const renfrewNA = renfrewUnits === 0 && !row.s4b_at;
   return {
     shipmentId: row.shipment_id,
     supplier: row.supplier || '',
@@ -156,7 +175,10 @@ function shipmentOut(row) {
     steps,
     s4bNote: row.s4b_note || '',
     s5Note: row.s5_note || '',
-    nextSteps: nextSteps(steps),
+    renfrewUnits,
+    countedUnits: Number(row.counted_units || 0),
+    renfrewNA,
+    nextSteps: nextSteps(steps, renfrewNA),
     done: !!row.s5_at
   };
 }
@@ -165,25 +187,26 @@ function shipmentOut(row) {
 export const PREREQ = { '2': [], '3': ['2'], '4a': ['3'], '4b': ['2'], '5': ['4a', '4b'] };
 const LATER = { '2': ['3', '4b'], '3': ['4a'], '4a': ['5'], '4b': ['5'], '5': [] };
 
-export function nextSteps(steps) {
-  return STEPS.filter((k) => !steps[k] && PREREQ[k].every((p) => steps[p]));
-}
-
-async function loadShipmentRow(tx, shipmentId) {
-  const wh = await whExists(tx);
-  const rows = await tx.query(
-    `select ${SHIPMENT_COLUMNS} from trk.shipments t
-     ${whJoin(wh)} where t.shipment_id = $1`,
-    [shipmentId]
-  );
-  if (!rows.length) throw new UserError('Shipment not found: ' + shipmentId);
-  return rows[0];
+export function nextSteps(steps, renfrewNA = false) {
+  const has = (k) => !!steps[k] || (renfrewNA && (k === '4b' || k === '5'));
+  return STEPS.filter((k) => !has(k) && PREREQ[k].every(has));
 }
 
 function whJoin(wh) {
   return wh
     ? 'left join wh.shipments s on s.shipment_id = t.shipment_id'
     : 'left join (select null::text as shipment_id, null::text as supplier, null::text as name, null::timestamptz as created_at, null::text as status, null::timestamptz as finalized_at) s on false';
+}
+
+async function loadShipmentRow(tx, shipmentId) {
+  const wh = await whExists(tx);
+  const rows = await tx.query(
+    `select ${shipmentColumns(wh)} from trk.shipments t
+     ${whJoin(wh)} where t.shipment_id = $1`,
+    [shipmentId]
+  );
+  if (!rows.length) throw new UserError('Shipment not found: ' + shipmentId);
+  return rows[0];
 }
 
 // Shipment lines with PO / MARINE / RENFREW allocations
@@ -234,11 +257,52 @@ async function loadLines(tx, shipmentId) {
   });
 }
 
+// While 4b is open, the Renfrew count list follows the inventory system (new lines added, expected qty updated).
+// Once 4b is complete the list is frozen; differences are shown instead (inventoryQty on each check).
+async function syncChecks(tx, shipmentId, lines) {
+  const renfrewLines = lines.filter((l) => l.renfrewQty > 0);
+  for (const line of renfrewLines) {
+    await tx.query(
+      `insert into trk.renfrew_checks (shipment_id, line_id, upc, product_name, expected_qty, counted_qty)
+       values ($1, $2, $3, $4, $5::int, 0)
+       on conflict (shipment_id, line_id) do update
+       set expected_qty = excluded.expected_qty, upc = excluded.upc, product_name = excluded.product_name`,
+      [shipmentId, line.lineId, line.upc, line.productName, line.renfrewQty]
+    );
+  }
+  const keep = renfrewLines.map((l) => l.lineId);
+  // Lines no longer going to Renfrew: drop if untouched, otherwise expect 0
+  await tx.query(
+    `delete from trk.renfrew_checks where shipment_id = $1 and counted_qty = 0 and put_qty = 0
+       and line_id <> all(array(select json_array_elements_text($2::text::json)))`,
+    [shipmentId, JSON.stringify(keep)]
+  );
+  await tx.query(
+    `update trk.renfrew_checks set expected_qty = 0 where shipment_id = $1
+       and line_id <> all(array(select json_array_elements_text($2::text::json)))`,
+    [shipmentId, JSON.stringify(keep)]
+  );
+}
+
+async function loadChecks(tx, shipmentId) {
+  return tx.query('select * from trk.renfrew_checks where shipment_id = $1 order by product_name, line_id', [shipmentId]);
+}
+
 async function logEvent(tx, shipmentId, step, action, user, note) {
   await tx.query(
     'insert into trk.events (shipment_id, step, action, by_name, note) values ($1, $2, $3, $4, $5)',
     [shipmentId, step, action, user, note || null]
   );
+}
+
+async function setStep(tx, shipmentId, step, user) {
+  const col = STEP_COL[step];
+  await tx.query(`update trk.shipments set ${col}_at = now(), ${col}_by = $2 where shipment_id = $1`, [shipmentId, user]);
+}
+
+async function clearStep(tx, shipmentId, step) {
+  const col = STEP_COL[step];
+  await tx.query(`update trk.shipments set ${col}_at = null, ${col}_by = null where shipment_id = $1`, [shipmentId]);
 }
 
 async function logMove(tx, m) {
@@ -261,14 +325,27 @@ async function addStock(tx, { locationCode, upc, productName, shipmentId, qty })
   );
 }
 
-async function takeStock(tx, stockId, qty) {
-  const rows = await tx.query('select * from trk.renfrew_stock where id = $1::bigint for update', [stockId]);
-  if (!rows.length) throw new UserError('Stock record not found. Someone may have moved it; please refresh.');
-  const row = rows[0];
-  if (Number(row.qty) < qty) throw new UserError(`Not enough stock: ${row.location_code} only has ${row.qty}.`);
-  if (Number(row.qty) === qty) await tx.query('delete from trk.renfrew_stock where id = $1::bigint', [stockId]);
-  else await tx.query('update trk.renfrew_stock set qty = qty - $2::int, updated_at = now() where id = $1::bigint', [stockId, qty]);
-  return row;
+// Take qty of a UPC from a location, oldest stock first; returns the portions taken (one per source shipment)
+async function takeFromLocation(tx, locationCode, upc, qty, preferredShipmentId = '') {
+  const rows = await tx.query(
+    `select * from trk.renfrew_stock where location_code = $1 and ltrim(upc, '0') = ltrim($2, '0')
+     order by ($3 <> '' and shipment_id = $3) desc, id for update`,
+    [locationCode, upc, preferredShipmentId]
+  );
+  const available = rows.reduce((n, r) => n + Number(r.qty), 0);
+  if (!available) throw new UserError(`${locationCode} has none of this item (${upc}).`, 'NOT_FOUND');
+  if (available < qty) throw new UserError(`Not enough stock: ${locationCode} only has ${available}.`);
+  const portions = [];
+  let left = qty;
+  for (const r of rows) {
+    if (!left) break;
+    const n = Math.min(left, Number(r.qty));
+    if (n === Number(r.qty)) await tx.query('delete from trk.renfrew_stock where id = $1::bigint', [r.id]);
+    else await tx.query('update trk.renfrew_stock set qty = qty - $2::int, updated_at = now() where id = $1::bigint', [r.id, n]);
+    portions.push({ row: r, qty: n });
+    left -= n;
+  }
+  return { portions, available };
 }
 
 async function requireLocation(tx, code) {
@@ -293,17 +370,35 @@ async function shipmentLabels(tx, ids) {
 }
 
 function stockOut(row, labels) {
-  const label = labels[row.shipment_id] || null;
   return {
     id: String(row.id),
     locationCode: row.location_code,
     upc: row.upc,
     productName: row.product_name || '',
     shipmentId: row.shipment_id || '',
-    shipment: label,
+    shipment: labels[row.shipment_id] || null,
     qty: Number(row.qty),
     updatedAt: row.updated_at
   };
+}
+
+// One entry per location + UPC; the source shipments are listed underneath
+function mergeStock(rows, labels) {
+  const out = [];
+  const index = {};
+  for (const r of rows) {
+    const key = r.location_code + '|' + String(r.upc).replace(/^0+/, '');
+    let item = index[key];
+    if (!item) {
+      item = index[key] = { locationCode: r.location_code, upc: r.upc, productName: r.product_name || '', qty: 0, sources: [], updatedAt: r.updated_at };
+      out.push(item);
+    }
+    item.qty += Number(r.qty);
+    if (!item.productName && r.product_name) item.productName = r.product_name;
+    if (r.updated_at > item.updatedAt) item.updatedAt = r.updated_at;
+    item.sources.push({ shipmentId: r.shipment_id || '', shipment: labels[r.shipment_id] || null, qty: Number(r.qty) });
+  }
+  return out;
 }
 
 async function productName(tx, upc) {
@@ -320,6 +415,28 @@ async function productName(tx, upc) {
      limit 1`, [upc]
   );
   return local.length ? local[0].product_name : '';
+}
+
+// Shipment for a Renfrew count action: step 2 done, 4b still open, count list in sync with inventory
+async function openCount(tx, shipmentId) {
+  const id = cleanText(shipmentId, 300);
+  await tx.query('select 1 from trk.shipments where shipment_id = $1 for update', [id]);
+  const shipment = shipmentOut(await loadShipmentRow(tx, id));
+  if (!shipment.steps['2']) throw new UserError('Step 2 "Qty Confirmed" must be done before the Renfrew count.');
+  if (shipment.steps['4b']) throw new UserError('The Renfrew count is already complete. Undo step 4b to change it.');
+  if (shipment.renfrewNA) throw new UserError('This shipment has no items for Renfrew.');
+  await syncChecks(tx, id, await loadLines(tx, id));
+  return { id, shipment };
+}
+
+// 4b completes by itself once every item is counted exactly
+async function autoCompleteCount(tx, id, user) {
+  const checks = await loadChecks(tx, id);
+  const open = checks.filter((c) => Number(c.expected_qty) > 0 || Number(c.counted_qty) > 0);
+  if (!open.length || open.some((c) => Number(c.counted_qty) !== Number(c.expected_qty))) return false;
+  await setStep(tx, id, '4b', user);
+  await logEvent(tx, id, '4b', 'DONE', user, 'All items counted');
+  return true;
 }
 
 // ---------- API ----------
@@ -345,15 +462,13 @@ const API = {
     const wh = await whExists(tx);
     const where = filter === 'done' ? 't.s5_at is not null' : filter === 'all' ? 'true' : 't.s5_at is null';
     const rows = await tx.query(
-      `select ${SHIPMENT_COLUMNS}, coalesce(agg.line_count, 0) as line_count,
-              coalesce(agg.expected_units, 0) as expected_units, coalesce(agg.received_units, 0) as received_units,
-              coalesce(agg.renfrew_units, 0) as renfrew_units
+      `select ${shipmentColumns(wh)}, coalesce(agg.line_count, 0) as line_count,
+              coalesce(agg.expected_units, 0) as expected_units, coalesce(agg.received_units, 0) as received_units
        from trk.shipments t ${whJoin(wh)}
        left join lateral (
-         ${wh ? `select count(*) as line_count, sum(expected_qty) as expected_units, sum(received_qty) as received_units,
-                 sum(required_renfrew_qty) as renfrew_units
+         ${wh ? `select count(*) as line_count, sum(expected_qty) as expected_units, sum(received_qty) as received_units
           from wh.shipment_lines l where l.shipment_id = t.shipment_id`
-              : 'select 0 as line_count, 0 as expected_units, 0 as received_units, 0 as renfrew_units'}
+              : 'select 0 as line_count, 0 as expected_units, 0 as received_units'}
        ) agg on true
        where not t.ignored and ${where}
        order by t.s5_at desc nulls first, coalesce(s.created_at, t.created_at) desc
@@ -362,40 +477,84 @@ const API = {
     return rows.map((r) => Object.assign(shipmentOut(r), {
       lineCount: Number(r.line_count),
       expectedUnits: Number(r.expected_units),
-      receivedUnits: Number(r.received_units),
-      renfrewUnits: Number(r.renfrew_units)
+      receivedUnits: Number(r.received_units)
     }));
   },
 
   async getShipment(tx, { shipmentId }) {
-    const row = await loadShipmentRow(tx, cleanText(shipmentId, 300));
-    const shipment = shipmentOut(row);
-    const lines = await loadLines(tx, shipment.shipmentId);
+    const id = cleanText(shipmentId, 300);
+    let shipment = shipmentOut(await loadShipmentRow(tx, id));
+    const lines = await loadLines(tx, id);
+    if (shipment.steps['2'] && !shipment.steps['4b'] && !shipment.renfrewNA) {
+      await syncChecks(tx, id, lines);
+      shipment = shipmentOut(await loadShipmentRow(tx, id));
+    }
     const events = await tx.query(
-      'select step, action, by_name, note, at from trk.events where shipment_id = $1 order by at desc, id desc limit 100',
-      [shipment.shipmentId]
+      'select step, action, by_name, note, at from trk.events where shipment_id = $1 order by at desc, id desc limit 100', [id]
     );
-    const checks = await tx.query(
-      'select * from trk.renfrew_checks where shipment_id = $1 order by upc, line_id', [shipment.shipmentId]
-    );
+    const checks = await loadChecks(tx, id);
     const stock = await tx.query(
       `select st.* from trk.renfrew_stock st join trk.renfrew_locations loc on loc.code = st.location_code
-       where st.shipment_id = $1 order by loc.sort, st.location_code, st.product_name`, [shipment.shipmentId]
+       where st.shipment_id = $1 order by loc.sort, st.location_code, st.product_name`, [id]
     );
-    const labels = await shipmentLabels(tx, [shipment.shipmentId]);
+    const labels = await shipmentLabels(tx, [id]);
+    const lineById = {};
+    for (const l of lines) lineById[l.lineId] = l;
     return {
       shipment,
       lines,
       events: events.map((e) => ({ step: e.step, action: e.action, by: e.by_name || '', note: e.note || '', at: e.at })),
-      checks: checks.map((c) => ({
-        lineId: c.line_id, upc: c.upc || '', productName: c.product_name || '',
-        expectedQty: Number(c.expected_qty), countedQty: Number(c.counted_qty), putQty: Number(c.put_qty)
-      })),
+      checks: checks.map((c) => {
+        const line = lineById[c.line_id];
+        const inventoryQty = line ? line.renfrewQty : 0;
+        return {
+          lineId: c.line_id, upc: c.upc || '', productName: c.product_name || '',
+          expectedQty: Number(c.expected_qty), countedQty: Number(c.counted_qty), putQty: Number(c.put_qty),
+          // Inventory system changed the Renfrew qty after the count was completed
+          inventoryQty, changed: !!shipment.steps['4b'] && inventoryQty !== Number(c.expected_qty)
+        };
+      }),
       stock: stock.map((r) => stockOut(r, labels))
     };
   },
 
-  async completeStep(tx, { shipmentId, step, password, note, counts, force }, ctx) {
+  // Renfrew count: one scan = +1 on the first matching item that is not full yet; saved immediately
+  async countScan(tx, { shipmentId, upc }, ctx) {
+    const user = requireUser(ctx);
+    upc = cleanUpc(upc);
+    if (!upc) throw new UserError('Enter or scan a UPC.');
+    const { id } = await openCount(tx, shipmentId);
+    const matches = (await loadChecks(tx, id)).filter((c) => sameUpc(c.upc, upc));
+    if (!matches.length) throw new UserError(`This UPC is not on the Renfrew list: ${upc}`, 'NOT_ON_LIST');
+    const target = matches.find((c) => Number(c.counted_qty) < Number(c.expected_qty)) || matches[matches.length - 1];
+    await tx.query('update trk.renfrew_checks set counted_qty = counted_qty + 1 where shipment_id = $1 and line_id = $2', [id, target.line_id]);
+    const completed = await autoCompleteCount(tx, id, user);
+    return Object.assign(await API.getShipment(tx, { shipmentId: id }), {
+      scanned: { lineId: target.line_id, productName: target.product_name || '', counted: Number(target.counted_qty) + 1, expected: Number(target.expected_qty) },
+      completed
+    });
+  },
+
+  // Renfrew count: set counts directly (typed quantities, "all match")
+  async setCounts(tx, { shipmentId, counts }, ctx) {
+    const user = requireUser(ctx);
+    const { id } = await openCount(tx, shipmentId);
+    const byLine = {};
+    for (const c of await loadChecks(tx, id)) byLine[c.line_id] = c;
+    for (const c of Array.isArray(counts) ? counts : []) {
+      const check = byLine[String(c.lineId)];
+      if (!check) throw new UserError('This item is not on the Renfrew list.');
+      const counted = wholeNumber(c.counted, 'Counted qty');
+      if (counted < Number(check.put_qty)) {
+        throw new UserError(`${check.product_name || check.upc}: ${check.put_qty} already put away, so the count cannot be lower than that.`);
+      }
+      await tx.query('update trk.renfrew_checks set counted_qty = $3::int where shipment_id = $1 and line_id = $2', [id, check.line_id, counted]);
+    }
+    const completed = await autoCompleteCount(tx, id, user);
+    return Object.assign(await API.getShipment(tx, { shipmentId: id }), { completed });
+  },
+
+  async completeStep(tx, { shipmentId, step, password, note, force }, ctx) {
     const user = requireUser(ctx);
     step = String(step || '');
     if (!STEP_COL[step]) throw new UserError('Invalid step: ' + step);
@@ -403,47 +562,30 @@ const API = {
     const tracked = await ensureShipment(tx, id);
     if (tracked && tracked.ignored) throw new UserError('This shipment is not tracked by the Receiving Tracker.', 'IGNORED');
     await tx.query('select 1 from trk.shipments where shipment_id = $1 for update', [id]);
-    const row = await loadShipmentRow(tx, id);
-    const shipment = shipmentOut(row);
+    const shipment = shipmentOut(await loadShipmentRow(tx, id));
     if (shipment.steps[step]) {
       throw new UserError(`Step ${step} "${STEP_LABELS[step]}" was already completed by ${shipment.steps[step].by}.`);
     }
-    const missing = PREREQ[step].filter((p) => !shipment.steps[p]);
+    if (shipment.renfrewNA && (step === '4b' || step === '5')) throw new UserError('This shipment has no items for Renfrew, so this step is not needed.');
+    const has = (k) => !!shipment.steps[k] || (shipment.renfrewNA && (k === '4b' || k === '5'));
+    const missing = PREREQ[step].filter((p) => !has(p));
     if (missing.length) {
       const need = missing.map((s) => `${s} "${STEP_LABELS[s]}"`).join(', ');
       throw new UserError(`Step ${step} is not available yet. Complete first: ${need}.`);
     }
     note = cleanText(note, 500);
 
-    if (step === '3') {
-      await verifyPassword(tx, ['pw_step3'], password, 'Manager 1 (Inventory Confirmed)');
-      if (shipment.whStatus !== 'FINALIZED' && !force) {
-        throw new UserError('This shipment is not finalized in the inventory system yet. Confirm inventory anyway?', 'CONFIRM');
-      }
+    if (STEP_PASSWORD[step]) await verifyPassword(tx, [STEP_PASSWORD[step][0]], password, STEP_PASSWORD[step][1]);
+    if (step === '3' && shipment.whStatus !== 'FINALIZED' && !force) {
+      throw new UserError('This shipment is not finalized in the inventory system yet. Confirm inventory anyway?', 'CONFIRM');
     }
-    if (step === '4a') await verifyPassword(tx, ['pw_step4a'], password, 'Manager 2 (Listed Online)');
 
     if (step === '4b') {
-      const lines = (await loadLines(tx, id)).filter((l) => l.renfrewQty > 0);
-      const countMap = {};
-      for (const c of Array.isArray(counts) ? counts : []) {
-        countMap[String(c.lineId)] = wholeNumber(c.counted, 'Counted qty');
-      }
-      const mismatches = [];
-      for (const line of lines) {
-        if (!(line.lineId in countMap)) throw new UserError(`Enter the counted qty for: ${line.productName || line.upc}`);
-        if (countMap[line.lineId] !== line.renfrewQty) mismatches.push(line);
-      }
+      // Complete (or close with a shortage) using the saved counts
+      await syncChecks(tx, id, await loadLines(tx, id));
+      const mismatches = (await loadChecks(tx, id)).filter((c) => Number(c.counted_qty) !== Number(c.expected_qty));
       if (mismatches.length && !note) {
         throw new UserError(`${mismatches.length} item(s) do not match the expected qty. Please add a note.`, 'NEED_NOTE');
-      }
-      await tx.query('delete from trk.renfrew_checks where shipment_id = $1', [id]);
-      for (const line of lines) {
-        await tx.query(
-          `insert into trk.renfrew_checks (shipment_id, line_id, upc, product_name, expected_qty, counted_qty)
-           values ($1, $2, $3, $4, $5::int, $6::int)`,
-          [id, line.lineId, line.upc, line.productName, line.renfrewQty, countMap[line.lineId]]
-        );
       }
       await tx.query('update trk.shipments set s4b_note = $2 where shipment_id = $1', [id, note || null]);
     }
@@ -466,9 +608,16 @@ const API = {
       await tx.query('update trk.shipments set s5_note = $2 where shipment_id = $1', [id, note || null]);
     }
 
-    const col = STEP_COL[step];
-    await tx.query(`update trk.shipments set ${col}_at = now(), ${col}_by = $2 where shipment_id = $1`, [id, user]);
+    await setStep(tx, id, step, user);
     await logEvent(tx, id, step, force ? 'DONE_FORCED' : 'DONE', user, note);
+
+    // No Renfrew items: 4a finishes the shipment
+    if (step === '4a' && shipment.renfrewNA) {
+      for (const s of ['4b', '5']) {
+        await setStep(tx, id, s, SYSTEM_USER);
+        await logEvent(tx, id, s, 'AUTO', SYSTEM_USER, 'No Renfrew items');
+      }
+    }
     return API.getShipment(tx, { shipmentId: id });
   },
 
@@ -478,25 +627,26 @@ const API = {
     if (!STEP_COL[step]) throw new UserError('Invalid step: ' + step);
     const id = cleanText(shipmentId, 300);
     await tx.query('select 1 from trk.shipments where shipment_id = $1 for update', [id]);
-    const shipment = shipmentOut(await loadShipmentRow(tx, id));
+    const row = await loadShipmentRow(tx, id);
+    const shipment = shipmentOut(row);
     if (!shipment.steps[step]) throw new UserError(`Step ${step} is not completed; nothing to undo.`);
-    const blocking = LATER[step].filter((s) => shipment.steps[s]);
+    // 4b/5 that were skipped automatically (no Renfrew items) are undone together with 4a
+    const autoNA = step === '4a' && row.s5_by === SYSTEM_USER && row.s4b_by === SYSTEM_USER;
+    const blocking = LATER[step].filter((s) => shipment.steps[s] && !(autoNA && s === '5'));
     if (blocking.length) throw new UserError(`Undo the later step(s) first: ${blocking.join(', ')}.`);
-    await verifyPassword(tx, await adminKeys(tx), password, 'manager');
-    if (step === '4b') {
-      const put = await tx.query('select coalesce(sum(put_qty), 0) as n from trk.renfrew_checks where shipment_id = $1', [id]);
-      if (Number(put[0].n) > 0) throw new UserError('Items from this shipment have already been put away, so the count cannot be undone. Adjust stock from the rack map instead.');
-      await tx.query('delete from trk.renfrew_checks where shipment_id = $1', [id]);
-      await tx.query('update trk.shipments set s4b_note = null where shipment_id = $1', [id]);
-    }
+    if (STEP_PASSWORD[step]) await verifyPassword(tx, [STEP_PASSWORD[step][0]], password, STEP_PASSWORD[step][1]);
+    if (step === '4b') await tx.query('update trk.shipments set s4b_note = null where shipment_id = $1', [id]);
     if (step === '5') await tx.query('update trk.shipments set s5_note = null where shipment_id = $1', [id]);
-    const col = STEP_COL[step];
-    await tx.query(`update trk.shipments set ${col}_at = null, ${col}_by = null where shipment_id = $1`, [id]);
+    if (autoNA) {
+      await clearStep(tx, id, '5');
+      await clearStep(tx, id, '4b');
+    }
+    await clearStep(tx, id, step);
     await logEvent(tx, id, step, 'UNDO', user, cleanText(note, 500));
     return API.getShipment(tx, { shipmentId: id });
   },
 
-  // Scan a UPC: which shipments it belongs to (open first) + Renfrew rack locations
+  // Scan a UPC: which shipments it belongs to (open first) + Renfrew stock locations
   async searchUpc(tx, { upc }) {
     upc = cleanUpc(upc);
     if (!upc) throw new UserError('Enter or scan a UPC.');
@@ -505,7 +655,7 @@ const API = {
     let lines = [];
     if (wh) {
       lines = await tx.query(
-        `select ${SHIPMENT_COLUMNS}, l.line_id, p.product_name, p.upc, l.expected_qty, l.received_qty,
+        `select ${shipmentColumns(true)}, l.line_id, p.product_name, p.upc, l.expected_qty, l.received_qty,
                 l.required_po_qty, l.required_renfrew_qty
          from wh.products p
          join wh.shipment_lines l on l.product_id = p.product_id
@@ -519,7 +669,7 @@ const API = {
     }
     const stockRows = await tx.query(
       `select st.* from trk.renfrew_stock st join trk.renfrew_locations loc on loc.code = st.location_code
-       where ltrim(st.upc, '0') = ltrim($1, '0') order by loc.sort, st.location_code`, [upc]
+       where ltrim(st.upc, '0') = ltrim($1, '0') order by loc.sort, st.location_code, st.id`, [upc]
     );
     const toPut = await tx.query(
       `select c.* from trk.renfrew_checks c where ltrim(c.upc, '0') = ltrim($1, '0') and c.counted_qty > c.put_qty`, [upc]
@@ -536,7 +686,7 @@ const API = {
           marineQty: Math.max(0, Number(r.expected_qty || 0) - Number(r.required_po_qty || 0) - Number(r.required_renfrew_qty || 0))
         }
       })),
-      stock: stockRows.map((r) => stockOut(r, labels)),
+      stock: mergeStock(stockRows, labels),
       toPutaway: toPut.map((c) => ({
         shipmentId: c.shipment_id, shipment: labels[c.shipment_id] || null, lineId: c.line_id,
         upc: c.upc, productName: c.product_name || '', remaining: Number(c.counted_qty) - Number(c.put_qty)
@@ -556,11 +706,11 @@ const API = {
     );
     const stock = await tx.query(
       `select st.* from trk.renfrew_stock st join trk.renfrew_locations loc on loc.code = st.location_code
-       where loc.active order by st.location_code, st.product_name, st.upc`
+       where loc.active order by st.location_code, st.product_name, st.upc, st.id`
     );
     const labels = await shipmentLabels(tx, stock.map((r) => r.shipment_id));
     const byCode = {};
-    for (const r of stock) (byCode[r.location_code] = byCode[r.location_code] || []).push(stockOut(r, labels));
+    for (const item of mergeStock(stock, labels)) (byCode[item.locationCode] = byCode[item.locationCode] || []).push(item);
     const racks = [];
     const rackIndex = {};
     for (const loc of locations) {
@@ -579,16 +729,39 @@ const API = {
     return { racks, toPutaway: await API.renfrewToPutaway(tx) };
   },
 
+  // Counted items not put away yet, with the suggested split:
+  //   Pending: 1 unit, unless this UPC is already in Pending or this shipment already sent one there
+  //   The rest: the box this UPC is in now (or was last put in), if that box is still active
   async renfrewToPutaway(tx) {
     const rows = await tx.query(
-      `select c.* from trk.renfrew_checks c join trk.shipments t on t.shipment_id = c.shipment_id
-       where c.counted_qty > c.put_qty order by t.s4b_at, c.product_name`
+      `select c.*,
+              (select st.location_code from trk.renfrew_stock st join trk.renfrew_locations l on l.code = st.location_code and l.active
+                where ltrim(st.upc, '0') = ltrim(c.upc, '0') and st.location_code <> 'PENDING'
+                order by st.updated_at desc limit 1) as current_loc,
+              (select m.to_code from trk.renfrew_moves m join trk.renfrew_locations l on l.code = m.to_code and l.active
+                where ltrim(m.upc, '0') = ltrim(c.upc, '0') and m.to_code <> 'PENDING'
+                order by m.at desc, m.id desc limit 1) as last_loc,
+              exists (select 1 from trk.renfrew_stock p where p.location_code = 'PENDING' and ltrim(p.upc, '0') = ltrim(c.upc, '0')) as in_pending,
+              exists (select 1 from trk.renfrew_moves m where m.shipment_id = c.shipment_id and m.to_code = 'PENDING'
+                        and ltrim(m.upc, '0') = ltrim(c.upc, '0')) as sent_pending
+       from trk.renfrew_checks c join trk.shipments t on t.shipment_id = c.shipment_id
+       where c.counted_qty > c.put_qty order by t.s2_at, c.product_name`
     );
     const labels = await shipmentLabels(tx, rows.map((r) => r.shipment_id));
-    return rows.map((c) => ({
-      shipmentId: c.shipment_id, shipment: labels[c.shipment_id] || null, lineId: c.line_id,
-      upc: c.upc || '', productName: c.product_name || '', remaining: Number(c.counted_qty) - Number(c.put_qty)
-    }));
+    // Within one batch, only the first line of a UPC gets the Pending unit
+    const pendingGiven = new Set();
+    return rows.map((c) => {
+      const remaining = Number(c.counted_qty) - Number(c.put_qty);
+      const key = String(c.upc || '').replace(/^0+/, '');
+      const pendingQty = !c.in_pending && !c.sent_pending && !pendingGiven.has(key) ? Math.min(1, remaining) : 0;
+      if (pendingQty) pendingGiven.add(key);
+      return {
+        shipmentId: c.shipment_id, shipment: labels[c.shipment_id] || null, lineId: c.line_id,
+        upc: c.upc || '', productName: c.product_name || '', remaining,
+        suggestPending: pendingQty,
+        suggestLocation: c.current_loc || c.last_loc || ''
+      };
+    });
   },
 
   // Put away: items = [{ shipmentId, lineId, qty, locationCode }]
@@ -611,26 +784,32 @@ const API = {
     return API.renfrewMap(tx);
   },
 
-  async renfrewMove(tx, { stockId, toCode, qty }, ctx) {
+  async renfrewMove(tx, { locationCode, upc, toCode, qty }, ctx) {
     const user = requireUser(ctx);
     qty = wholeNumber(qty, 'Qty', { min: 1 });
-    const loc = await requireLocation(tx, toCode);
-    const row = await takeStock(tx, stockId, qty);
-    if (row.location_code === loc.code) throw new UserError('Source and destination are the same location.');
-    await addStock(tx, { locationCode: loc.code, upc: row.upc, productName: row.product_name, shipmentId: row.shipment_id, qty });
-    await logMove(tx, { upc: row.upc, productName: row.product_name, shipmentId: row.shipment_id, from: row.location_code, to: loc.code, qty, reason: 'MOVE', user });
+    const from = await requireLocation(tx, locationCode);
+    const to = await requireLocation(tx, toCode);
+    if (from.code === to.code) throw new UserError('Source and destination are the same location.');
+    const { portions } = await takeFromLocation(tx, from.code, cleanUpc(upc), qty);
+    for (const { row, qty: n } of portions) {
+      await addStock(tx, { locationCode: to.code, upc: row.upc, productName: row.product_name, shipmentId: row.shipment_id, qty: n });
+      await logMove(tx, { upc: row.upc, productName: row.product_name, shipmentId: row.shipment_id, from: from.code, to: to.code, qty: n, reason: 'MOVE', user });
+    }
     return API.renfrewMap(tx);
   },
 
-  async renfrewRemove(tx, { stockId, qty, reason, note }, ctx) {
+  async renfrewRemove(tx, { locationCode, upc, qty, reason, note }, ctx) {
     const user = requireUser(ctx);
     qty = wholeNumber(qty, 'Qty', { min: 1 });
     reason = REMOVE_REASONS[reason] ? reason : 'OTHER';
-    const row = await takeStock(tx, stockId, qty);
-    await logMove(tx, {
-      upc: row.upc, productName: row.product_name, shipmentId: row.shipment_id, from: row.location_code,
-      to: reason === 'TO_STORE' ? 'STORE' : null, qty, reason: reason + (note ? ': ' + cleanText(note, 200) : ''), user
-    });
+    const from = await requireLocation(tx, locationCode);
+    const { portions } = await takeFromLocation(tx, from.code, cleanUpc(upc), qty);
+    for (const { row, qty: n } of portions) {
+      await logMove(tx, {
+        upc: row.upc, productName: row.product_name, shipmentId: row.shipment_id, from: from.code,
+        to: reason === 'TO_STORE' ? 'STORE' : null, qty: n, reason: reason + (note ? ': ' + cleanText(note, 200) : ''), user
+      });
+    }
     return API.renfrewMap(tx);
   },
 
@@ -652,33 +831,24 @@ const API = {
     upc = cleanUpc(upc);
     if (!upc) throw new UserError('Enter or scan a UPC.');
     qty = wholeNumber(qty == null ? 1 : qty, 'Qty', { min: 1 });
-    const preferred = cleanText(shipmentId, 300);
-    const rows = await tx.query(
-      `select * from trk.renfrew_stock where location_code = $1 and ltrim(upc, '0') = ltrim($2, '0')
-       order by (shipment_id = $3) desc, updated_at, id for update`,
-      [PENDING, upc, preferred]
-    );
-    const available = rows.reduce((n, r) => n + Number(r.qty), 0);
-    if (!available) throw new UserError(`This item is not in Pending (${upc}).`, 'NOT_FOUND');
-    if (available < qty) throw new UserError(`Pending only has ${available} of this item.`);
-    let left = qty;
-    const taken = [];
-    for (const r of rows) {
-      if (!left) break;
-      const n = Math.min(left, Number(r.qty));
-      await takeStock(tx, r.id, n);
-      await logMove(tx, { upc: r.upc, productName: r.product_name, shipmentId: r.shipment_id, from: PENDING, to: 'STORE', qty: n, reason: 'TO_STORE', user });
-      taken.push({ shipmentId: r.shipment_id, productName: r.product_name || '', qty: n });
-      left -= n;
+    let taken;
+    try {
+      taken = await takeFromLocation(tx, PENDING, upc, qty, cleanText(shipmentId, 300));
+    } catch (error) {
+      if (error.code === 'NOT_FOUND') throw new UserError(`This item is not in Pending (${upc}).`, 'NOT_FOUND');
+      throw error;
     }
-    const labels = await shipmentLabels(tx, taken.map((t) => t.shipmentId));
-    const warnings = [...new Set(taken.map((t) => t.shipmentId))]
+    for (const { row, qty: n } of taken.portions) {
+      await logMove(tx, { upc: row.upc, productName: row.product_name, shipmentId: row.shipment_id, from: PENDING, to: 'STORE', qty: n, reason: 'TO_STORE', user });
+    }
+    const labels = await shipmentLabels(tx, taken.portions.map((p) => p.row.shipment_id));
+    const warnings = [...new Set(taken.portions.map((p) => p.row.shipment_id))]
       .filter((sid) => sid && labels[sid] && !labels[sid].step4a)
       .map((sid) => `${labels[sid].supplier} ${labels[sid].name} has not completed 4a "Listed Online"`);
     return {
-      productName: taken[0].productName,
-      taken: taken.map((t) => Object.assign(t, { shipment: labels[t.shipmentId] || null })),
-      remainingForUpc: available - qty,
+      productName: taken.portions[0].row.product_name || '',
+      taken: taken.portions.map((p) => ({ shipmentId: p.row.shipment_id, productName: p.row.product_name || '', qty: p.qty, shipment: labels[p.row.shipment_id] || null })),
+      remainingForUpc: taken.available - qty,
       warnings
     };
   },
