@@ -1,24 +1,24 @@
-// 進貨進度追蹤（Receiving Tracker）後端邏輯。
-// 只讀取庫存系統的 wh.*，所有寫入都在 trk.*。
+// Receiving Tracker backend logic.
+// Reads the inventory system's wh.* tables only; every write goes to trk.*.
 //
-// db 介面：db.transaction(async (tx) => ...)，tx.query(sql, params) 回傳 rows[]。
-// 呼叫：handle(db, fn, args, { code, user })
-//   code = 員工共用密碼（header x-trk-code）
-//   user = 操作人員名字（header x-trk-user）
+// db interface: db.transaction(async (tx) => ...), tx.query(sql, params) resolves to rows[].
+// Call: handle(db, fn, args, { code, user })
+//   code = shared staff password (header x-trk-code)
+//   user = name of the person acting (header x-trk-user)
 
 export const STEPS = ['2', '3', '4a', '4b', '5'];
 export const STEP_LABELS = {
-  '1': '匯入點貨單',
-  '2': '數量已確認',
-  '3': '確認入庫存',
-  '4a': '上架系統',
-  '4b': 'Renfrew 清點',
-  '5': '上架店內'
+  '1': 'Imported',
+  '2': 'Qty Confirmed',
+  '3': 'Inventory Confirmed',
+  '4a': 'Listed Online',
+  '4b': 'Renfrew Count',
+  '5': 'On Store Shelf'
 };
 const STEP_COL = { '2': 's2', '3': 's3', '4a': 's4a', '4b': 's4b', '5': 's5' };
 const PENDING = 'PENDING';
 const PASSWORD_KEYS = ['pw_access', 'pw_step3', 'pw_step4a', 'pw_admin'];
-const REMOVE_REASONS = { TO_STORE: '上架店內', SOLD: '售出', DAMAGED: '損壞', ADJUST: '數量調整', OTHER: '其他' };
+const REMOVE_REASONS = { TO_STORE: 'To store floor', SOLD: 'Sold', DAMAGED: 'Damaged', ADJUST: 'Qty adjustment', OTHER: 'Other' };
 
 export class UserError extends Error {
   constructor(message, code) {
@@ -32,7 +32,7 @@ const accessCache = new Map();
 
 export async function handle(db, fn, args, ctx) {
   const api = API[fn];
-  if (!api) throw new UserError('未知的操作：' + fn);
+  if (!api) throw new UserError('Unknown action: ' + fn);
   const payload = (args && typeof args === 'object') ? args : {};
   const context = { code: String((ctx && ctx.code) || ''), user: cleanText((ctx && ctx.user) || '', 40) };
   return db.transaction(async (tx) => {
@@ -53,12 +53,12 @@ function cleanUpc(value) {
 
 function wholeNumber(value, label, { min = 0 } = {}) {
   const n = Number(value);
-  if (!Number.isInteger(n) || n < min) throw new UserError(`${label}必須是 ${min} 以上的整數。`);
+  if (!Number.isInteger(n) || n < min) throw new UserError(`${label} must be a whole number of at least ${min}.`);
   return n;
 }
 
 function requireUser(ctx) {
-  if (!ctx.user) throw new UserError('請先輸入你的名字。', 'NEED_USER');
+  if (!ctx.user) throw new UserError('Please enter your name first.', 'NEED_USER');
   return ctx.user;
 }
 
@@ -70,26 +70,26 @@ async function setting(tx, key) {
 async function checkAccess(tx, code) {
   const hash = await setting(tx, 'pw_access');
   if (!hash) return;
-  if (!code) throw new UserError('請輸入員工密碼。', 'ACCESS');
+  if (!code) throw new UserError('Please enter the staff password.', 'ACCESS');
   const cacheKey = hash + '|' + code;
   const cached = accessCache.get(cacheKey);
   if (cached && cached > Date.now()) return;
   const rows = await tx.query('select extensions.crypt($1::text, $2::text) = $2::text as ok', [code, hash]);
-  if (!rows[0].ok) throw new UserError('員工密碼不正確。', 'ACCESS');
+  if (!rows[0].ok) throw new UserError('Incorrect staff password.', 'ACCESS');
   if (accessCache.size > 200) accessCache.clear();
   accessCache.set(cacheKey, Date.now() + 5 * 60 * 1000);
 }
 
-// 任一 key 的密碼符合即通過
+// Passes if the password matches any of the keys
 async function verifyPassword(tx, keys, password, label) {
   const rows = await tx.query(
     `select key, extensions.crypt($1::text, value) = value as ok from trk.settings
      where key = any(array(select json_array_elements_text($2::text::json)))`,
     [String(password || ''), JSON.stringify(keys)]
   );
-  if (!rows.length) throw new UserError(`${label}密碼尚未設定，請管理員先設定。`);
-  if (!password) throw new UserError(`請輸入${label}密碼。`, 'PASSWORD');
-  if (!rows.some((r) => r.ok)) throw new UserError(`${label}密碼不正確。`, 'PASSWORD');
+  if (!rows.length) throw new UserError(`The ${label} password has not been set yet. Ask an admin to set it.`);
+  if (!password) throw new UserError(`Please enter the ${label} password.`, 'PASSWORD');
+  if (!rows.some((r) => r.ok)) throw new UserError(`Incorrect ${label} password.`, 'PASSWORD');
 }
 
 async function adminKeys(tx) {
@@ -101,7 +101,7 @@ async function whExists(tx) {
   return rows[0].ok;
 }
 
-// 把 go_live 之後在庫存系統建立的點貨單加入追蹤
+// Start tracking shipments created in the inventory system after go_live
 async function syncShipments(tx) {
   if (!(await whExists(tx))) return;
   await tx.query(
@@ -119,7 +119,7 @@ const SHIPMENT_COLUMNS = `
   (s.shipment_id is null) as wh_missing,
   t.s2_at, t.s2_by, t.s3_at, t.s3_by, t.s4a_at, t.s4a_by, t.s4b_at, t.s4b_by, t.s4b_note, t.s5_at, t.s5_by, t.s5_note`;
 
-// 庫存系統有些點貨單沒有名稱，改用 shipment_id 的「|」後面那段
+// Some inventory shipments have no name; fall back to the part of shipment_id after '|'
 function displayName(name, shipmentId) {
   if (name) return name;
   const id = String(shipmentId || '');
@@ -147,7 +147,7 @@ function shipmentOut(row) {
   };
 }
 
-// 流程：1 → 2 → [3 → 4a] 與 [4b] 兩條平行支線 → 5
+// Flow: 1 -> 2 -> two parallel lanes [3 -> 4a] and [4b] -> 5
 export const PREREQ = { '2': [], '3': ['2'], '4a': ['3'], '4b': ['2'], '5': ['4a', '4b'] };
 const LATER = { '2': ['3', '4b'], '3': ['4a'], '4a': ['5'], '4b': ['5'], '5': [] };
 
@@ -162,7 +162,7 @@ async function loadShipmentRow(tx, shipmentId) {
      ${whJoin(wh)} where t.shipment_id = $1`,
     [shipmentId]
   );
-  if (!rows.length) throw new UserError('找不到這張進貨表：' + shipmentId);
+  if (!rows.length) throw new UserError('Shipment not found: ' + shipmentId);
   return rows[0];
 }
 
@@ -172,7 +172,7 @@ function whJoin(wh) {
     : 'left join (select null::text as shipment_id, null::text as supplier, null::text as name, null::timestamptz as created_at, null::text as status, null::timestamptz as finalized_at) s on false';
 }
 
-// 點貨單明細（含 PO / MARINE / RENFREW 分配）
+// Shipment lines with PO / MARINE / RENFREW allocations
 async function loadLines(tx, shipmentId) {
   if (!(await whExists(tx))) return [];
   const query = (lineTable, allocTable) => tx.query(
@@ -214,7 +214,7 @@ async function loadLines(tx, shipmentId) {
       marine: { plan: Math.max(0, expected - po - renfrew), allocated: Number(r.marine_alloc) },
       renfrew: { plan: renfrew, allocated: renfrewAlloc },
       ngQty: Number(r.ng_alloc),
-      // Renfrew 應到數量：計畫與實際分配取較大者
+      // Renfrew expected qty: the larger of plan and actual allocation
       renfrewQty: Math.max(renfrew, renfrewAlloc)
     };
   });
@@ -249,9 +249,9 @@ async function addStock(tx, { locationCode, upc, productName, shipmentId, qty })
 
 async function takeStock(tx, stockId, qty) {
   const rows = await tx.query('select * from trk.renfrew_stock where id = $1::bigint for update', [stockId]);
-  if (!rows.length) throw new UserError('找不到這筆庫存，可能已被其他人移動，請重新整理。');
+  if (!rows.length) throw new UserError('Stock record not found. Someone may have moved it; please refresh.');
   const row = rows[0];
-  if (Number(row.qty) < qty) throw new UserError(`數量不足：${row.location_code} 只有 ${row.qty} 件。`);
+  if (Number(row.qty) < qty) throw new UserError(`Not enough stock: ${row.location_code} only has ${row.qty}.`);
   if (Number(row.qty) === qty) await tx.query('delete from trk.renfrew_stock where id = $1::bigint', [stockId]);
   else await tx.query('update trk.renfrew_stock set qty = qty - $2::int, updated_at = now() where id = $1::bigint', [stockId, qty]);
   return row;
@@ -259,7 +259,7 @@ async function takeStock(tx, stockId, qty) {
 
 async function requireLocation(tx, code) {
   const rows = await tx.query('select * from trk.renfrew_locations where code = $1 and active', [cleanText(code, 20).toUpperCase()]);
-  if (!rows.length) throw new UserError('找不到貨架位置：' + code);
+  if (!rows.length) throw new UserError('Location not found: ' + code);
   return rows[0];
 }
 
@@ -374,42 +374,42 @@ const API = {
   async completeStep(tx, { shipmentId, step, password, note, counts, force }, ctx) {
     const user = requireUser(ctx);
     step = String(step || '');
-    if (!STEP_COL[step]) throw new UserError('無效的步驟：' + step);
+    if (!STEP_COL[step]) throw new UserError('Invalid step: ' + step);
     const id = cleanText(shipmentId, 300);
     await tx.query('select 1 from trk.shipments where shipment_id = $1 for update', [id]);
     const row = await loadShipmentRow(tx, id);
     const shipment = shipmentOut(row);
     if (shipment.steps[step]) {
-      throw new UserError(`步驟 ${step}「${STEP_LABELS[step]}」已經由 ${shipment.steps[step].by} 完成了。`);
+      throw new UserError(`Step ${step} "${STEP_LABELS[step]}" was already completed by ${shipment.steps[step].by}.`);
     }
     const missing = PREREQ[step].filter((p) => !shipment.steps[p]);
     if (missing.length) {
-      const need = missing.map((s) => `${s}「${STEP_LABELS[s]}」`).join('、');
-      throw new UserError(`還不能進行步驟 ${step}，請先完成：${need}。`);
+      const need = missing.map((s) => `${s} "${STEP_LABELS[s]}"`).join(', ');
+      throw new UserError(`Step ${step} is not available yet. Complete first: ${need}.`);
     }
     note = cleanText(note, 500);
 
     if (step === '3') {
-      await verifyPassword(tx, ['pw_step3'], password, '主管1（確認入庫存）');
+      await verifyPassword(tx, ['pw_step3'], password, 'Manager 1 (Inventory Confirmed)');
       if (shipment.whStatus !== 'FINALIZED' && !force) {
-        throw new UserError('庫存系統中這張點貨單尚未 Finalize。仍要確認入庫存嗎？', 'CONFIRM');
+        throw new UserError('This shipment is not finalized in the inventory system yet. Confirm inventory anyway?', 'CONFIRM');
       }
     }
-    if (step === '4a') await verifyPassword(tx, ['pw_step4a'], password, '主管2（上架系統）');
+    if (step === '4a') await verifyPassword(tx, ['pw_step4a'], password, 'Manager 2 (Listed Online)');
 
     if (step === '4b') {
       const lines = (await loadLines(tx, id)).filter((l) => l.renfrewQty > 0);
       const countMap = {};
       for (const c of Array.isArray(counts) ? counts : []) {
-        countMap[String(c.lineId)] = wholeNumber(c.counted, '清點數量');
+        countMap[String(c.lineId)] = wholeNumber(c.counted, 'Counted qty');
       }
       const mismatches = [];
       for (const line of lines) {
-        if (!(line.lineId in countMap)) throw new UserError(`請填寫清點數量：${line.productName || line.upc}`);
+        if (!(line.lineId in countMap)) throw new UserError(`Enter the counted qty for: ${line.productName || line.upc}`);
         if (countMap[line.lineId] !== line.renfrewQty) mismatches.push(line);
       }
       if (mismatches.length && !note) {
-        throw new UserError(`有 ${mismatches.length} 項數量與應到數量不符，請填寫備註說明。`, 'NEED_NOTE');
+        throw new UserError(`${mismatches.length} item(s) do not match the expected qty. Please add a note.`, 'NEED_NOTE');
       }
       await tx.query('delete from trk.renfrew_checks where shipment_id = $1', [id]);
       for (const line of lines) {
@@ -433,9 +433,9 @@ const API = {
       const pendingQty = Number(pending[0].n);
       if ((unputQty > 0 || pendingQty > 0) && !force) {
         const parts = [];
-        if (unputQty > 0) parts.push(`還有 ${unputQty} 件未歸架`);
-        if (pendingQty > 0) parts.push(`Pending 還有 ${pendingQty} 件未掃描上架店內`);
-        throw new UserError(parts.join('，') + '。仍要完成並隱藏這張進貨表嗎？', 'CONFIRM');
+        if (unputQty > 0) parts.push(`${unputQty} unit(s) not put away yet`);
+        if (pendingQty > 0) parts.push(`${pendingQty} unit(s) still in Pending (not scanned to the store floor)`);
+        throw new UserError(parts.join('; ') + '. Complete and hide this shipment anyway?', 'CONFIRM');
       }
       await tx.query('update trk.shipments set s5_note = $2 where shipment_id = $1', [id, note || null]);
     }
@@ -449,17 +449,17 @@ const API = {
   async undoStep(tx, { shipmentId, step, password, note }, ctx) {
     const user = requireUser(ctx);
     step = String(step || '');
-    if (!STEP_COL[step]) throw new UserError('無效的步驟：' + step);
+    if (!STEP_COL[step]) throw new UserError('Invalid step: ' + step);
     const id = cleanText(shipmentId, 300);
     await tx.query('select 1 from trk.shipments where shipment_id = $1 for update', [id]);
     const shipment = shipmentOut(await loadShipmentRow(tx, id));
-    if (!shipment.steps[step]) throw new UserError(`步驟 ${step} 尚未完成，不需要撤銷。`);
+    if (!shipment.steps[step]) throw new UserError(`Step ${step} is not completed; nothing to undo.`);
     const blocking = LATER[step].filter((s) => shipment.steps[s]);
-    if (blocking.length) throw new UserError(`請先撤銷後面的步驟：${blocking.join('、')}。`);
-    await verifyPassword(tx, await adminKeys(tx), password, '主管');
+    if (blocking.length) throw new UserError(`Undo the later step(s) first: ${blocking.join(', ')}.`);
+    await verifyPassword(tx, await adminKeys(tx), password, 'manager');
     if (step === '4b') {
       const put = await tx.query('select coalesce(sum(put_qty), 0) as n from trk.renfrew_checks where shipment_id = $1', [id]);
-      if (Number(put[0].n) > 0) throw new UserError('這張進貨表已經有商品歸架，不能撤銷清點。請用貨架地圖調整庫存。');
+      if (Number(put[0].n) > 0) throw new UserError('Items from this shipment have already been put away, so the count cannot be undone. Adjust stock from the rack map instead.');
       await tx.query('delete from trk.renfrew_checks where shipment_id = $1', [id]);
       await tx.query('update trk.shipments set s4b_note = null where shipment_id = $1', [id]);
     }
@@ -470,10 +470,10 @@ const API = {
     return API.getShipment(tx, { shipmentId: id });
   },
 
-  // 掃 UPC：屬於哪些進貨表（未完成優先）＋ Renfrew 貨架位置
+  // Scan a UPC: which shipments it belongs to (open first) + Renfrew rack locations
   async searchUpc(tx, { upc }) {
     upc = cleanUpc(upc);
-    if (!upc) throw new UserError('請輸入或掃描 UPC。');
+    if (!upc) throw new UserError('Enter or scan a UPC.');
     await syncShipments(tx);
     const wh = await whExists(tx);
     let lines = [];
@@ -518,7 +518,7 @@ const API = {
     };
   },
 
-  // ---------- Renfrew 倉庫 ----------
+  // ---------- Renfrew backroom ----------
 
   async renfrewMap(tx) {
     const locations = await tx.query('select * from trk.renfrew_locations where active order by sort, code');
@@ -559,19 +559,19 @@ const API = {
     }));
   },
 
-  // 歸架：items = [{ shipmentId, lineId, qty, locationCode }]
+  // Put away: items = [{ shipmentId, lineId, qty, locationCode }]
   async renfrewPutaway(tx, { items }, ctx) {
     const user = requireUser(ctx);
-    if (!Array.isArray(items) || !items.length) throw new UserError('沒有要歸架的商品。');
+    if (!Array.isArray(items) || !items.length) throw new UserError('Nothing to put away.');
     for (const item of items) {
-      const qty = wholeNumber(item.qty, '歸架數量', { min: 1 });
+      const qty = wholeNumber(item.qty, 'Put-away qty', { min: 1 });
       const loc = await requireLocation(tx, item.locationCode);
       const rows = await tx.query(
         `update trk.renfrew_checks set put_qty = put_qty + $3::int
          where shipment_id = $1 and line_id = $2 and counted_qty - put_qty >= $3::int returning *`,
         [cleanText(item.shipmentId, 300), cleanText(item.lineId, 60), qty]
       );
-      if (!rows.length) throw new UserError('歸架數量超過未歸架數量，請重新整理後再試。');
+      if (!rows.length) throw new UserError('Put-away qty is more than what is left to put away. Refresh and try again.');
       const c = rows[0];
       await addStock(tx, { locationCode: loc.code, upc: c.upc, productName: c.product_name, shipmentId: c.shipment_id, qty });
       await logMove(tx, { upc: c.upc, productName: c.product_name, shipmentId: c.shipment_id, from: 'ARRIVAL', to: loc.code, qty, reason: 'PUTAWAY', user });
@@ -581,10 +581,10 @@ const API = {
 
   async renfrewMove(tx, { stockId, toCode, qty }, ctx) {
     const user = requireUser(ctx);
-    qty = wholeNumber(qty, '數量', { min: 1 });
+    qty = wholeNumber(qty, 'Qty', { min: 1 });
     const loc = await requireLocation(tx, toCode);
     const row = await takeStock(tx, stockId, qty);
-    if (row.location_code === loc.code) throw new UserError('來源和目的地是同一個位置。');
+    if (row.location_code === loc.code) throw new UserError('Source and destination are the same location.');
     await addStock(tx, { locationCode: loc.code, upc: row.upc, productName: row.product_name, shipmentId: row.shipment_id, qty });
     await logMove(tx, { upc: row.upc, productName: row.product_name, shipmentId: row.shipment_id, from: row.location_code, to: loc.code, qty, reason: 'MOVE', user });
     return API.renfrewMap(tx);
@@ -592,7 +592,7 @@ const API = {
 
   async renfrewRemove(tx, { stockId, qty, reason, note }, ctx) {
     const user = requireUser(ctx);
-    qty = wholeNumber(qty, '數量', { min: 1 });
+    qty = wholeNumber(qty, 'Qty', { min: 1 });
     reason = REMOVE_REASONS[reason] ? reason : 'OTHER';
     const row = await takeStock(tx, stockId, qty);
     await logMove(tx, {
@@ -605,8 +605,8 @@ const API = {
   async renfrewAdd(tx, { upc, locationCode, qty, productName: name }, ctx) {
     const user = requireUser(ctx);
     upc = cleanUpc(upc);
-    if (!upc) throw new UserError('請輸入或掃描 UPC。');
-    qty = wholeNumber(qty, '數量', { min: 1 });
+    if (!upc) throw new UserError('Enter or scan a UPC.');
+    qty = wholeNumber(qty, 'Qty', { min: 1 });
     const loc = await requireLocation(tx, locationCode);
     const productNameValue = cleanText(name, 200) || await productName(tx, upc);
     await addStock(tx, { locationCode: loc.code, upc, productName: productNameValue, shipmentId: '', qty });
@@ -614,12 +614,12 @@ const API = {
     return API.renfrewMap(tx);
   },
 
-  // 步驟 5：掃描 UPC，把 Pending 的商品移出（上架店內）
+  // Step 5: scan a UPC to move an item out of Pending (onto the store floor)
   async renfrewScanOut(tx, { upc, qty, shipmentId }, ctx) {
     const user = requireUser(ctx);
     upc = cleanUpc(upc);
-    if (!upc) throw new UserError('請輸入或掃描 UPC。');
-    qty = wholeNumber(qty == null ? 1 : qty, '數量', { min: 1 });
+    if (!upc) throw new UserError('Enter or scan a UPC.');
+    qty = wholeNumber(qty == null ? 1 : qty, 'Qty', { min: 1 });
     const preferred = cleanText(shipmentId, 300);
     const rows = await tx.query(
       `select * from trk.renfrew_stock where location_code = $1 and ltrim(upc, '0') = ltrim($2, '0')
@@ -627,8 +627,8 @@ const API = {
       [PENDING, upc, preferred]
     );
     const available = rows.reduce((n, r) => n + Number(r.qty), 0);
-    if (!available) throw new UserError(`Pending 裡沒有這個商品（${upc}）。`, 'NOT_FOUND');
-    if (available < qty) throw new UserError(`Pending 裡這個商品只有 ${available} 件。`);
+    if (!available) throw new UserError(`This item is not in Pending (${upc}).`, 'NOT_FOUND');
+    if (available < qty) throw new UserError(`Pending only has ${available} of this item.`);
     let left = qty;
     const taken = [];
     for (const r of rows) {
@@ -642,7 +642,7 @@ const API = {
     const labels = await shipmentLabels(tx, taken.map((t) => t.shipmentId));
     const warnings = [...new Set(taken.map((t) => t.shipmentId))]
       .filter((sid) => sid && labels[sid] && !labels[sid].step4a)
-      .map((sid) => `${labels[sid].supplier} ${labels[sid].name} 尚未完成 4a「上架系統」`);
+      .map((sid) => `${labels[sid].supplier} ${labels[sid].name} has not completed 4a "Listed Online"`);
     return {
       productName: taken[0].productName,
       taken: taken.map((t) => Object.assign(t, { shipment: labels[t.shipmentId] || null })),
@@ -669,18 +669,18 @@ const API = {
     return { upc, productName: upc ? await productName(tx, upc) : '' };
   },
 
-  // ---------- 管理 ----------
+  // ---------- Admin ----------
 
   async addLocation(tx, { code, rack, password }, ctx) {
     requireUser(ctx);
-    await verifyPassword(tx, await adminKeys(tx), password, '主管');
+    await verifyPassword(tx, await adminKeys(tx), password, 'manager');
     code = cleanText(code, 20).toUpperCase();
     rack = cleanText(rack || code, 20).toUpperCase();
     if (!/^[A-Z0-9][A-Z0-9-]*$/.test(code) || !/^[A-Z0-9][A-Z0-9-]*$/.test(rack)) {
-      throw new UserError('位置代碼只能用英文字母、數字和 -。');
+      throw new UserError('Location codes may only use letters, digits and -.');
     }
     const existing = await tx.query('select * from trk.renfrew_locations where code = $1', [code]);
-    if (existing.length && existing[0].active) throw new UserError('這個位置已經存在：' + code);
+    if (existing.length && existing[0].active) throw new UserError('Location already exists: ' + code);
     const sortRows = await tx.query(
       'select coalesce(max(sort), 0) as s, count(*) as n from trk.renfrew_locations where rack = $1', [rack]
     );
@@ -693,26 +693,26 @@ const API = {
 
   async removeLocation(tx, { code, password }, ctx) {
     requireUser(ctx);
-    await verifyPassword(tx, await adminKeys(tx), password, '主管');
+    await verifyPassword(tx, await adminKeys(tx), password, 'manager');
     code = cleanText(code, 20).toUpperCase();
-    if (code === PENDING) throw new UserError('Pending 不能刪除。');
+    if (code === PENDING) throw new UserError('Pending cannot be removed.');
     const stock = await tx.query('select coalesce(sum(qty), 0) as n from trk.renfrew_stock where location_code = $1', [code]);
-    if (Number(stock[0].n) > 0) throw new UserError('這個位置還有商品，請先移走。');
+    if (Number(stock[0].n) > 0) throw new UserError('This location still has items. Move them first.');
     await tx.query('update trk.renfrew_locations set active = false where code = $1', [code]);
     return API.renfrewMap(tx);
   },
 
   async setPassword(tx, { key, value, adminPassword }, ctx) {
     requireUser(ctx);
-    if (!PASSWORD_KEYS.includes(key)) throw new UserError('無效的密碼種類。');
-    await verifyPassword(tx, await adminKeys(tx), adminPassword, '主管');
+    if (!PASSWORD_KEYS.includes(key)) throw new UserError('Invalid password type.');
+    await verifyPassword(tx, await adminKeys(tx), adminPassword, 'manager');
     value = String(value || '');
     if (!value) {
-      if (key !== 'pw_access') throw new UserError('密碼不能是空白。');
+      if (key !== 'pw_access') throw new UserError('Password cannot be blank.');
       await tx.query("delete from trk.settings where key = 'pw_access'");
       return { ok: true };
     }
-    if (value.length < 4) throw new UserError('密碼至少 4 個字元。');
+    if (value.length < 4) throw new UserError('Password must be at least 4 characters.');
     await tx.query(
       `insert into trk.settings (key, value) values ($1, extensions.crypt($2::text, extensions.gen_salt('bf', 8)))
        on conflict (key) do update set value = excluded.value, updated_at = now()`,

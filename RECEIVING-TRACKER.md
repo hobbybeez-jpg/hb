@@ -7,6 +7,18 @@
 - 後端：Supabase Edge Function `receiving-tracker`（`supabase/functions/receiving-tracker/`）
 - 資料：同一個 Supabase 資料庫的 `trk` schema（`supabase/migrations/20261006000001_receiving_tracker.sql`）
 - **不會寫入庫存系統**（`wh` schema 只讀）
+- 介面與錯誤訊息全部是英文（本文件為中文說明）
+
+畫面上的英文名稱對照：
+
+| 步驟 | 畫面名稱 | 分頁 | 畫面名稱 |
+|---|---|---|---|
+| 1 匯入點貨單 | Imported | 進貨表 | Shipments |
+| 2 數量已確認 | Qty Confirmed | 掃描查詢 | UPC Lookup |
+| 3 確認入庫存 | Inventory Confirmed | Renfrew 倉庫 | Renfrew Backroom |
+| 4a 上架系統 | Listed Online | 異動紀錄 | Activity Log |
+| 4b Renfrew 清點 | Renfrew Count | 設定 | Settings |
+| 5 上架店內 | On Store Shelf | 待歸架 | To Put Away |
 
 ## 流程
 
