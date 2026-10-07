@@ -681,6 +681,18 @@ function transferErrorMessage(error) {
   return 'Unexpected error: ' + cleanText(error && error.message ? error.message : String(error), 300);
 }
 
+// Name of the Shopify product with this barcode; never throws (the name is only a suggestion)
+async function shopifyProductName(shopify, upc) {
+  try {
+    const found = (await shopify.variantsByBarcode([upc]))[upc] || [];
+    if (!found.length) return { productName: '', source: '' };
+    return { productName: cleanText(found[0].name, 200), source: 'shopify', matches: found.length };
+  } catch (error) {
+    console.error('shopifyProductName', error);
+    return { productName: '', source: '' };
+  }
+}
+
 // Shopify actions run their own transactions (Shopify is called between them)
 const SHOPIFY_ACTIONS = {
   // Create the transfer when step 4a was done before Shopify was connected, or retry after an error (Manager 2 password)
@@ -1251,9 +1263,14 @@ const API = {
     }));
   },
 
-  async lookupUpc(tx, { upc }) {
+  // Product name for a UPC: inventory system, then the tracker's own records, then Shopify (the hobby-bee.com products)
+  async lookupUpc(tx, { upc }, ctx) {
     upc = cleanUpc(upc);
-    return { upc, productName: upc ? await productName(tx, upc) : '' };
+    const name = upc ? await productName(tx, upc) : '';
+    if (!name && upc && ctx.shopify && !ctx.shopify.configError) {
+      ctx.after(async () => Object.assign({ upc }, await shopifyProductName(ctx.shopify, upc)));
+    }
+    return { upc, productName: name, source: name ? 'inventory' : '' };
   },
 
   // ---------- Admin ----------

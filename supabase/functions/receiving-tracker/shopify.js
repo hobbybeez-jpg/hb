@@ -172,7 +172,7 @@ export function createShopify(config, fetchImpl = fetch) {
           const data = await graphql(
             `query TrkVariantsByBarcode($q: String!, $after: String) {
               productVariants(first: 100, query: $q, after: $after) {
-                nodes { id barcode displayName inventoryItem { id tracked } }
+                nodes { id barcode title product { title } inventoryItem { id tracked } }
                 pageInfo { hasNextPage endCursor }
               }
             }`,
@@ -182,7 +182,10 @@ export function createShopify(config, fetchImpl = fetch) {
           for (const v of page.nodes) {
             const key = strip(v.barcode);
             if (!chunk.includes(key)) continue;
-            (found[key] = found[key] || []).push({ id: v.id, barcode: v.barcode, name: v.displayName, inventoryItemId: v.inventoryItem && v.inventoryItem.id, tracked: !!(v.inventoryItem && v.inventoryItem.tracked) });
+            // "Product - Variant", or just the product title for a product without options
+            const title = v.product ? v.product.title : '';
+            const name = !v.title || v.title === 'Default Title' ? title : `${title} - ${v.title}`;
+            (found[key] = found[key] || []).push({ id: v.id, barcode: v.barcode, name, inventoryItemId: v.inventoryItem && v.inventoryItem.id, tracked: !!(v.inventoryItem && v.inventoryItem.tracked) });
           }
           after = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
         } while (after);
