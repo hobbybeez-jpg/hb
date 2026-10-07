@@ -23,7 +23,7 @@ const STEP_COL = { '2': 's2', '3': 's3', '4a': 's4a', '4b': 's4b', '5': 's5' };
 const STEP_PASSWORD = { '3': ['pw_step3', 'Manager 1 (Inventory Confirmed)'], '4a': ['pw_step4a', 'Manager 2 (Listed Online)'] };
 const SYSTEM_USER = 'System';
 const PENDING = 'PENDING';
-const PASSWORD_KEYS = ['pw_access', 'pw_step3', 'pw_step4a', 'pw_step5', 'pw_admin'];
+const PASSWORD_KEYS = ['pw_access', 'pw_step3', 'pw_step4a', 'pw_admin'];
 const MIN_PASSWORD_LENGTH = 8;
 // Wrong passwords: 5 per IP or 50 in total per password within 15 minutes locks that password for the rest of the window
 const LOCKOUT = { perClient: 5, total: 50, minutes: 15 };
@@ -701,8 +701,8 @@ const SHOPIFY_ACTIONS = {
     return result;
   },
 
-  // Step 5: receive the transfer at Renfrew with the quantities counted in 4b (Renfrew manager password)
-  async shopifyReceiveTransfer(db, { shipmentId, password }, ctx) {
+  // Step 5: receive the transfer at Renfrew with the quantities counted in 4b (no manager password, like step 5 itself)
+  async shopifyReceiveTransfer(db, { shipmentId }, ctx) {
     const id = cleanText(shipmentId, 300);
     let shopify = null;
     const claim = await db.transaction(async (tx) => {
@@ -716,7 +716,6 @@ const SHOPIFY_ACTIONS = {
       if (!row || row.status === 'UNLINKED' || !row.shipment_gid) throw new UserError('This shipment has no Shopify transfer in transit.');
       if (row.status === 'RECEIVED') throw new UserError(`Shopify transfer ${row.transfer_name} was already received by ${row.received_by}.`);
       if (row.status === 'RECEIVING' && claimFresh(row)) throw new UserError('This transfer is being received. Refresh in a few minutes.');
-      await verifyPassword(tx, ctx, ['pw_step5'], password, 'Renfrew manager (Shopify received)');
       const checks = await loadChecks(tx, id);
       await tx.query("update trk.shopify_transfers set status = 'RECEIVING', attempt_at = now(), error = null, updated_at = now() where shipment_id = $1", [id]);
       return { row, checks, user };

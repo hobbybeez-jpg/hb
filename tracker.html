@@ -281,7 +281,6 @@
           <select class="inp" id="pwKey">
             <option value="pw_step3">Manager 1: Inventory Confirmed (step 3)</option>
             <option value="pw_step4a">Manager 2: Listed Online (step 4a, creates the Shopify transfer)</option>
-            <option value="pw_step5">Renfrew manager: Shopify transfer received (step 5)</option>
             <option value="pw_admin">Admin (change passwords)</option>
             <option value="pw_access">Staff password (to open the app)</option>
           </select>
@@ -301,7 +300,7 @@
       1 Inventory staff import the shipment (it appears here automatically) → 2 Warehouse counts and taps "Qty Confirmed" → two parallel lanes:
       [3 Manager 1 confirms inventory (password) → 4a Manager 2 lists online (password)] and [4b Renfrew staff count and put away] →
       5 once both lanes are done, Renfrew staff scan Pending items onto the store floor; the shipment is then hidden.<br />
-      When Shopify is connected: step 4a also creates a Shopify transfer Marine Drive → Renfrew (in transit), and from step 5 the Renfrew manager
+      When Shopify is connected: step 4a also creates a Shopify transfer Marine Drive → Renfrew (in transit), and from step 5 Renfrew staff
       marks it received with "Confirm transfer received" (the quantities counted in 4b).
     </div>
   </section>
@@ -829,7 +828,7 @@ function canReceive(d) {
   const t = d && d.shopifyTransfer; const s = d && d.shipment;
   return !!(t && s && s.steps['4a'] && s.steps['4b'] && !t.busy && ['CREATED', 'RECEIVE_ERROR', 'RECEIVING'].includes(t.status));
 }
-function receiveButton() { return ' <button class="btn primary small" type="button" data-shopify="receive">🔒 Confirm transfer received</button>'; }
+function receiveButton() { return ' <button class="btn primary small" type="button" data-shopify="receive">Confirm transfer received</button>'; }
 function shopifySection(d) {
   const s = d.shipment; const t = d.shopifyTransfer;
   if (!t && !(shopifyConnected() && s.renfrewUnits > 0)) return '';
@@ -856,9 +855,8 @@ async function shopifyAction(kind) {
   const label = `${s.supplier} · ${s.name}`;
   try {
     if (kind === 'receive') {
-      const pw = await askPassword('Confirm transfer received', `${label}. Marks Shopify transfer ${t.name} received at Renfrew with the quantities counted in 4b. Renfrew manager password required.`);
-      if (pw == null) return false;
-      state.detail = await api('shopifyReceiveTransfer', { shipmentId: s.shipmentId, password: pw });
+      if (!confirm(`${label}\n\nMark Shopify transfer ${t.name} as received at Renfrew with the quantities counted in 4b?`)) return false;
+      state.detail = await api('shopifyReceiveTransfer', { shipmentId: s.shipmentId });
       const r = state.detail.shopifyTransfer;
       toast(`Shopify transfer ${r.name} received: ${r.receivedQty}/${r.totalQty} pcs`, 'ok');
     } else if (kind === 'create') {
@@ -1368,13 +1366,12 @@ $('#pwForm').onsubmit = async (e) => {
 async function loadPwStatus() {
   try {
     const r = state.config = await api('ping');
-    const names = { pw_access: 'Staff', pw_step3: 'Manager 1', pw_step4a: 'Manager 2', pw_step5: 'Renfrew manager', pw_admin: 'Admin' };
+    const names = { pw_access: 'Staff', pw_step3: 'Manager 1', pw_step4a: 'Manager 2', pw_admin: 'Admin' };
     $('#pwStatus').innerHTML = 'Set: ' + Object.keys(names).map((k) => `<span class="tag ${r.passwordsSet.includes(k) ? 'ok' : ''}">${names[k]} ${r.passwordsSet.includes(k) ? '✓' : 'not set'}</span>`).join(' ') +
       (r.passwordsSet.includes('pw_access') ? '' : '<div class="note-box" style="margin-top:8px">The staff password is not set: anyone who has the link can open this app and do the steps that need no manager password.</div>');
     const sh = r.shopify || {};
     $('#shopifyStatus').innerHTML = sh.connected
-      ? `<span class="tag ok">Connected</span> ${esc(sh.store)} · step 4a creates a transfer Marine Drive → Renfrew; step 5 marks it received (Renfrew manager password).` +
-        (r.passwordsSet.includes('pw_step5') ? '' : ' <span class="tag bad">Set the Renfrew manager password</span>')
+      ? `<span class="tag ok">Connected</span> ${esc(sh.store)} · step 4a creates a transfer Marine Drive → Renfrew; step 5 marks it received.`
       : sh.error ? `<span class="tag bad">Not working</span> ${esc(sh.error)}` : 'Not connected (no Shopify settings on the server).';
   } catch (e) { /* the sign-in dialog handles this */ }
 }

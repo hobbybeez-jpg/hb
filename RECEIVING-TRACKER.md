@@ -30,14 +30,14 @@
 | 3 | 主管1 | 確認入庫存 | 步驟 2；主管1 密碼；庫存系統尚未 Finalize 時會提醒 |
 | 4a | 主管2 | 商品上架系統；有 Renfrew 商品時自動在 Shopify 建立調貨單（運送中） | 步驟 3；主管2 密碼 |
 | 4b | Renfrew 店員 | 清點到貨商品（掃描 UPC 每次 +1，或直接輸入），**每掃一次就存檔**，可以分批、隔天繼續；全部點齊自動完成，缺貨可填備註後按 Complete 4b | 步驟 2（和 3 平行，不用等 3） |
-| 5 | Renfrew 店員 | 4a、4b 都完成後，掃描 Pending 的商品上架店內（4a 完成後店員才看得到價格、打條碼）；Renfrew 主管按「Confirm transfer received」把 Shopify 調貨單標為已收貨 | 完成後進貨表自動隱藏（「已完成」可查）；收貨需要 Renfrew 主管密碼 |
+| 5 | Renfrew 店員 | 4a、4b 都完成後，掃描 Pending 的商品上架店內（4a 完成後店員才看得到價格、打條碼）；按「Confirm transfer received」把 Shopify 調貨單標為已收貨 | 完成後進貨表自動隱藏（「已完成」可查） |
 
 - 步驟 2 之後分成兩條平行支線：**3 → 4a**（主管）與 **4b**（Renfrew）。兩條都完成才能做 5。
   進度條中間分上下兩排：上排＝3、4a，下排＝4b。
 - **沒有 Renfrew 商品的單**：4b、5 顯示「Not needed」，4a 完成後整張單自動完成並隱藏（撤銷 4a 會一起恢復）。
 - 每個步驟記錄「誰、什麼時候」。按錯可以「Undo」（後面的步驟要先撤銷）。
 - **密碼只用在步驟 3、4a 和它們的 Undo**（3＝主管1 密碼，4a＝主管2 密碼）；步驟 2、4b、5 和它們的 Undo 都不需要密碼。
-  Shopify 的動作另外需要密碼：建立／重試調貨單＝主管2 密碼，標為已收貨＝Renfrew 主管密碼，Unlink＝管理密碼。
+  Shopify 的動作另外需要密碼：建立／重試調貨單＝主管2 密碼，Unlink＝管理密碼；標為已收貨（Confirm transfer received）和步驟 5 一樣不需要主管密碼。
 - 撤銷 4b 只會重新打開清點，已點的數量和已歸架的商品都保留，可以直接修改。
 - 步驟 5 時如果還有未歸架或 Pending 未清空的商品，或 Shopify 調貨單還沒標為已收貨，會提醒，確認後仍可完成。
 
@@ -83,7 +83,6 @@
 | `pw_access` | 員工密碼（進入系統）；未設定＝不需要。**強烈建議設定**：未設定時，任何拿到網址的人都能打開系統、做不需要主管密碼的步驟 |
 | `pw_step3` | 主管1：確認入庫存 |
 | `pw_step4a` | 主管2：上架系統；建立／重試 Shopify 調貨單 |
-| `pw_step5` | Renfrew 主管：Shopify 調貨單標為已收貨（Confirm transfer received） |
 | `pw_admin` | 管理密碼：「設定」頁變更密碼、Unlink Shopify 調貨單；未設定時可用主管1或主管2的密碼 |
 
 - **密碼輸錯鎖定**：同一個 IP 在 15 分鐘內輸錯同一種密碼 5 次，或所有人合計輸錯 50 次，該密碼鎖定到 15 分鐘的時間窗結束（正確的密碼也暫時不能用）。
@@ -95,7 +94,6 @@
 insert into trk.settings (key, value) values
   ('pw_step3',  extensions.crypt('主管1密碼', extensions.gen_salt('bf', 8))),
   ('pw_step4a', extensions.crypt('主管2密碼', extensions.gen_salt('bf', 8))),
-  ('pw_step5',  extensions.crypt('Renfrew主管密碼', extensions.gen_salt('bf', 8))),
   ('pw_admin',  extensions.crypt('管理密碼',  extensions.gen_salt('bf', 8))),
   ('pw_access', extensions.crypt('員工密碼',  extensions.gen_salt('bf', 8)))
 on conflict (key) do update set value = excluded.value, updated_at = now();
@@ -138,8 +136,8 @@ on conflict (key) do update set value = excluded.value, updated_at = now();
     明細的「Shopify Transfer」區會列出是哪些商品；修正 Shopify 的 Barcode 後按「Manager 2: Try again」。
   - 4a 本身照樣完成，不會因為 Shopify 出錯而失敗。
   - 4a 完成時 Shopify 還沒連動的舊單，可以在明細按「Manager 2: Create Shopify transfer」補建。
-- **步驟 5 開始後（4a、4b 都完成）**：步驟 5 卡片和「Shopify Transfer」區會出現 **🔒 Confirm transfer received**，
-  Renfrew 主管輸入密碼後，把調貨單標為已收貨，收貨數量＝**4b 實際點到的數量**（最多到調貨數量）。
+- **步驟 5 開始後（4a、4b 都完成）**：步驟 5 卡片和「Shopify Transfer」區會出現 **Confirm transfer received**，
+  Renfrew 店員按下並確認後（不需要主管密碼），把調貨單標為已收貨，收貨數量＝**4b 實際點到的數量**（最多到調貨數量）。
   短少的數量在 Shopify 保持「未收貨」，請到 Shopify 處理（例如之後補收或拒收）。
 - 完成步驟 5 時如果調貨單還沒收貨，會提醒。
 
@@ -172,7 +170,7 @@ on conflict (key) do update set value = excluded.value, updated_at = now();
 | `SHOPIFY_TO_LOCATION_ID` | Renfrew 的 location ID |
 | `SHOPIFY_API_VERSION` | 選填，預設 `2026-07` |
 
-4. 在「設定」頁設定 Renfrew 主管密碼（`pw_step5`）。「設定」頁的 Shopify 區會顯示 Connected，或缺少哪個設定。
+4. 「設定」頁的 Shopify 區會顯示 Connected，或缺少哪個設定。
 5. 先用一張小的進貨單測試，到 Shopify 確認調貨單內容正確。
 
 **資料**：`trk.shopify_transfers`（每張進貨單一筆：狀態、Shopify 調貨單 ID／編號、每個商品的 inventory item 與數量、誰建立／收貨），
