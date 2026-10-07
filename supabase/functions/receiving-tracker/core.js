@@ -527,6 +527,12 @@ function transferOut(row) {
   };
 }
 
+// Saved item list; rows written before the ::text::jsonb fix hold it as a JSON string
+function transferLines(row) {
+  const lines = typeof row.lines === 'string' ? JSON.parse(row.lines) : row.lines;
+  return Array.isArray(lines) ? lines : [];
+}
+
 function claimFresh(row) {
   return !!row.attempt_at && Date.now() - new Date(row.attempt_at).getTime() < CLAIM_STALE_MS;
 }
@@ -648,7 +654,7 @@ async function runCreateTransfer(db, ctx, shipmentId) {
     }
     await db.transaction(async (tx) => {
       await tx.query(
-        `update trk.shopify_transfers set status = 'CREATED', transfer_id = $2, transfer_name = $3, shipment_gid = $4, lines = $5::jsonb,
+        `update trk.shopify_transfers set status = 'CREATED', transfer_id = $2, transfer_name = $3, shipment_gid = $4, lines = $5::text::jsonb,
            total_qty = $6::int, error = null, created_at = now(), updated_at = now()
          where shipment_id = $1`,
         [shipmentId, transfer.id, transfer.name, shipped.id, JSON.stringify(lines.map(({ label, ...l }) => l)), totalQty]
@@ -726,7 +732,7 @@ const SHOPIFY_ACTIONS = {
       const counted = {};
       for (const c of checks) counted[normUpc(c.upc)] = (counted[normUpc(c.upc)] || 0) + Number(c.counted_qty);
       const target = {};
-      for (const l of row.lines || []) {
+      for (const l of transferLines(row)) {
         const n = l.upcs.reduce((sum, upc) => sum + (counted[normUpc(upc)] || 0), 0);
         target[l.inventoryItemId] = Math.min(l.qty, n);
       }
