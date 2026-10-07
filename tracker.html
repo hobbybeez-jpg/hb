@@ -294,7 +294,7 @@ const LOCAL = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
 const API_URL = LOCAL ? '/api/receiving-tracker' : SUPABASE_URL + '/functions/v1/receiving-tracker';
 
 const STEP_LABELS = { '1': 'Imported', '2': 'Qty Confirmed', '3': 'Inventory Confirmed', '4a': 'Listed Online', '4b': 'Renfrew Count', '5': 'On Store Shelf' };
-const STEP_WHO = { '1': 'Inventory staff', '2': 'Warehouse staff', '3': 'Manager 1', '4a': 'Manager 2', '4b': 'Renfrew staff', '5': 'Renfrew staff' };
+const STEP_WHO = { '1': 'Inventory staff', '2': 'Warehouse staff (in the inventory system)', '3': 'Manager 1', '4a': 'Manager 2', '4b': 'Renfrew staff', '5': 'Renfrew staff' };
 const REMOVE_REASONS = { TO_STORE: 'To store floor', SOLD: 'Sold', DAMAGED: 'Damaged', ADJUST: 'Qty adjustment', OTHER: 'Other' };
 const MOVE_REASONS = { PUTAWAY: 'Put away', MOVE: 'Move', ADD: 'Manual add', TO_STORE: 'To store floor', SOLD: 'Sold', DAMAGED: 'Damaged', ADJUST: 'Qty adjustment', OTHER: 'Other' };
 

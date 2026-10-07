@@ -5,6 +5,8 @@
 //   Authorization: Bearer <SUPABASE_ANON_KEY>   (gateway check; the anon key is public by design)
 //   x-trk-code: shared staff password (pw_access in trk.settings; not needed when unset)
 //   x-trk-user: name of the person acting (URL encoded)
+// The inventory system calls with the signed-in user's own access token instead of the anon key;
+// the gateway has already verified it (verify_jwt), and the user's account name is recorded on the step.
 // Response: { ok: true, result } | { ok: false, error, code }
 //
 // Optional secret: TRACKER_ALLOWED_ORIGINS, e.g. https://hobbybee.netlify.app
@@ -28,6 +30,22 @@ function cors(origin: string | null) {
   };
 }
 
+// Account name from a signed-in user's token ("amy@hobbybee.local" -> "amy"); '' for the anon key
+function tokenUser(req: Request): string {
+  const token = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+  const part = token.split('.')[1];
+  if (!part) return '';
+  try {
+    const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4)));
+    if (payload.role !== 'authenticated' || !payload.email) return '';
+    const email = String(payload.email).toLowerCase();
+    return email.endsWith('@hobbybee.local') ? email.slice(0, email.indexOf('@')) : email;
+  } catch {
+    return '';
+  }
+}
+
 function reply(body: unknown, status: number, origin: string | null) {
   return new Response(JSON.stringify(body), { status, headers: { ...cors(origin), 'Content-Type': 'application/json' } });
 }
@@ -42,6 +60,7 @@ Deno.serve(async (req) => {
   const fn = String(body.fn || '');
   let user = '';
   try { user = decodeURIComponent(req.headers.get('x-trk-user') || ''); } catch { user = ''; }
+  user = tokenUser(req) || user;
 
   try {
     const result = await handle(db, fn, body.args || {}, { code: req.headers.get('x-trk-code') || '', user });
