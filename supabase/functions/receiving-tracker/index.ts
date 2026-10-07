@@ -10,10 +10,13 @@
 // Response: { ok: true, result } | { ok: false, error, code }
 //
 // Optional secret: TRACKER_ALLOWED_ORIGINS, e.g. https://hobbybee.netlify.app
+// Optional Shopify secrets (transfer Marine Drive -> Renfrew): see shopify.js
 import postgres from 'npm:postgres@3.4.5';
 import { handle } from './core.js';
+import { shopifyFromEnv } from './shopify.js';
 
 const allowedOrigins = (Deno.env.get('TRACKER_ALLOWED_ORIGINS') || '*').split(',').map((s) => s.trim()).filter(Boolean);
+const shopify = shopifyFromEnv((key: string) => Deno.env.get(key));
 const sql = postgres(Deno.env.get('SUPABASE_DB_URL')!, { max: 4, prepare: false, idle_timeout: 20, onnotice: () => {} });
 const db = {
   transaction: (fn: (tx: unknown) => Promise<unknown>) =>
@@ -28,6 +31,15 @@ function cors(origin: string | null) {
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Vary': 'Origin'
   };
+}
+
+// Caller's IP for the wrong-password lockout. A forged header only spreads attempts across "IPs";
+// the per-password total limit in core.js still applies.
+function clientIp(req: Request): string {
+  const cf = req.headers.get('cf-connecting-ip');
+  if (cf) return cf.trim();
+  const forwarded = (req.headers.get('x-forwarded-for') || '').split(',').map((s) => s.trim()).filter(Boolean);
+  return forwarded[0] || req.headers.get('x-real-ip') || '';
 }
 
 // Account name from a signed-in user's token ("amy@hobbybee.local" -> "amy"); '' for the anon key
@@ -60,15 +72,19 @@ Deno.serve(async (req) => {
   const fn = String(body.fn || '');
   let user = '';
   try { user = decodeURIComponent(req.headers.get('x-trk-user') || ''); } catch { user = ''; }
-  user = tokenUser(req) || user;
+  const accountName = tokenUser(req);
+  user = accountName || user;
 
   try {
-    const result = await handle(db, fn, body.args || {}, { code: req.headers.get('x-trk-code') || '', user });
+    const result = await handle(db, fn, body.args || {}, {
+      code: req.headers.get('x-trk-code') || '', user, client: clientIp(req), signedIn: !!accountName, shopify
+    });
     return reply({ ok: true, result }, 200, origin);
   } catch (error) {
     const err = error as { message?: string; code?: string; name?: string };
     if (err && err.name === 'UserError') return reply({ ok: false, error: err.message, code: err.code || '' }, 200, origin);
     console.error(fn, error);
-    return reply({ ok: false, error: 'Server error: ' + (err && err.message ? err.message : String(error)) }, 500, origin);
+    // Details stay in the function log
+    return reply({ ok: false, error: 'Server error. Please try again.' }, 500, origin);
   }
 });

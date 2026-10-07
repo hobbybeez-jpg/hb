@@ -2,9 +2,12 @@
 // Reads the inventory system's wh.* tables only; every write goes to trk.*.
 //
 // db interface: db.transaction(async (tx) => ...), tx.query(sql, params) resolves to rows[].
-// Call: handle(db, fn, args, { code, user })
-//   code = shared staff password (header x-trk-code)
-//   user = name of the person acting (header x-trk-user)
+// Call: handle(db, fn, args, { code, user, client, signedIn, shopify })
+//   code     = shared staff password (header x-trk-code)
+//   user     = name of the person acting (header x-trk-user)
+//   client   = caller's IP address (used to lock out repeated wrong passwords)
+//   signedIn = the call carries a signed-in inventory system user's token (verified by the gateway)
+//   shopify  = Shopify client from shopify.js, or null when Shopify is not configured
 
 export const STEPS = ['2', '3', '4a', '4b', '5'];
 export const STEP_LABELS = {
@@ -21,6 +24,11 @@ const STEP_PASSWORD = { '3': ['pw_step3', 'Manager 1 (Inventory Confirmed)'], '4
 const SYSTEM_USER = 'System';
 const PENDING = 'PENDING';
 const PASSWORD_KEYS = ['pw_access', 'pw_step3', 'pw_step4a', 'pw_admin'];
+const MIN_PASSWORD_LENGTH = 8;
+// Wrong passwords: 5 per IP or 50 in total per password within 15 minutes locks that password for the rest of the window
+const LOCKOUT = { perClient: 5, total: 50, minutes: 15 };
+// The inventory system's Qty Confirmed button works without the staff password (its users are already signed in)
+const SIGNED_IN_ACTIONS = ['getStatus', 'completeStep:2'];
 const REMOVE_REASONS = { TO_STORE: 'To store floor', SOLD: 'Sold', DAMAGED: 'Damaged', ADJUST: 'Qty adjustment', OTHER: 'Other' };
 
 export class UserError extends Error {
@@ -35,13 +43,32 @@ const accessCache = new Map();
 
 export async function handle(db, fn, args, ctx) {
   const api = API[fn];
-  if (!api) throw new UserError('Unknown action: ' + fn);
+  const shopifyAction = SHOPIFY_ACTIONS[fn];
+  if (!api && !shopifyAction) throw new UserError('Unknown action: ' + fn);
   const payload = (args && typeof args === 'object') ? args : {};
-  const context = { code: String((ctx && ctx.code) || ''), user: cleanText((ctx && ctx.user) || '', 40) };
-  return db.transaction(async (tx) => {
-    await checkAccess(tx, context.code);
-    return api(tx, payload, context);
-  });
+  const action = fn === 'completeStep' ? fn + ':' + String(payload.step || '') : fn;
+  const context = {
+    code: String((ctx && ctx.code) || ''),
+    user: cleanText((ctx && ctx.user) || '', 40),
+    client: cleanText((ctx && ctx.client) || '', 64),
+    skipAccess: !!(ctx && ctx.signedIn) && SIGNED_IN_ACTIONS.includes(action),
+    shopify: (ctx && ctx.shopify) || null
+  };
+  // Work that must run after the transaction commits (Shopify calls); each job returns the new result
+  const after = [];
+  context.after = (job) => after.push(job);
+  try {
+    if (shopifyAction) return await shopifyAction(db, payload, context);
+    let result = await db.transaction(async (tx) => {
+      await checkAccess(tx, context);
+      return api(tx, payload, context);
+    });
+    for (const job of after) result = await job(db, result);
+    return result;
+  } catch (error) {
+    if (error && error.authKey) await recordFailure(db, context.client, error.authKey);
+    throw error;
+  }
 }
 
 // ---------- helpers ----------
@@ -72,21 +99,24 @@ async function setting(tx, key) {
   return rows.length ? rows[0].value : null;
 }
 
-async function checkAccess(tx, code) {
+async function checkAccess(tx, ctx) {
+  if (ctx.skipAccess) return;
+  const code = ctx.code;
   const hash = await setting(tx, 'pw_access');
   if (!hash) return;
   if (!code) throw new UserError('Please enter the staff password.', 'ACCESS');
   const cacheKey = hash + '|' + code;
   const cached = accessCache.get(cacheKey);
   if (cached && cached > Date.now()) return;
+  await assertNotLocked(tx, ctx.client, 'pw_access');
   const rows = await tx.query('select extensions.crypt($1::text, $2::text) = $2::text as ok', [code, hash]);
-  if (!rows[0].ok) throw new UserError('Incorrect staff password.', 'ACCESS');
+  if (!rows[0].ok) throw wrongPassword('Incorrect staff password.', 'ACCESS', 'pw_access');
   if (accessCache.size > 200) accessCache.clear();
   accessCache.set(cacheKey, Date.now() + 5 * 60 * 1000);
 }
 
 // Passes if the password matches any of the keys
-async function verifyPassword(tx, keys, password, label) {
+async function verifyPassword(tx, ctx, keys, password, label) {
   const rows = await tx.query(
     `select key, extensions.crypt($1::text, value) = value as ok from trk.settings
      where key = any(array(select json_array_elements_text($2::text::json)))`,
@@ -94,7 +124,36 @@ async function verifyPassword(tx, keys, password, label) {
   );
   if (!rows.length) throw new UserError(`The ${label} password has not been set yet. Ask an admin to set it.`);
   if (!password) throw new UserError(`Please enter the ${label} password.`, 'PASSWORD');
-  if (!rows.some((r) => r.ok)) throw new UserError(`Incorrect ${label} password.`, 'PASSWORD');
+  const lockKey = keys.join('|');
+  await assertNotLocked(tx, ctx.client, lockKey);
+  if (!rows.some((r) => r.ok)) throw wrongPassword(`Incorrect ${label} password.`, 'PASSWORD', lockKey);
+}
+
+function wrongPassword(message, code, key) {
+  return Object.assign(new UserError(message, code), { authKey: key });
+}
+
+async function assertNotLocked(tx, client, key) {
+  const rows = await tx.query(
+    `select count(*) filter (where client = $1) as mine, count(*) as total from trk.auth_failures
+     where key = $2 and at > now() - make_interval(mins => $3::int)`,
+    [client || '', key, LOCKOUT.minutes]
+  );
+  if (Number(rows[0].mine) >= LOCKOUT.perClient || Number(rows[0].total) >= LOCKOUT.total) {
+    throw new UserError(`Too many wrong passwords. Please wait ${LOCKOUT.minutes} minutes and try again.`, 'LOCKED');
+  }
+}
+
+// Runs in its own transaction: the failed request's transaction is rolled back
+async function recordFailure(db, client, key) {
+  try {
+    await db.transaction(async (tx) => {
+      await tx.query('insert into trk.auth_failures (client, key) values ($1, $2)', [client || '', key]);
+      await tx.query("delete from trk.auth_failures where at < now() - interval '1 day'");
+    });
+  } catch (e) {
+    console.error('recordFailure', e);
+  }
 }
 
 async function adminKeys(tx) {
@@ -439,12 +498,319 @@ async function autoCompleteCount(tx, id, user) {
   return true;
 }
 
+// ---------- Shopify transfer (Marine Drive -> Renfrew) ----------
+// One transfer per shipment, created after step 4a and received from step 5.
+// trk.shopify_transfers.status:
+//   PENDING / CREATING / ERROR   being created / failed (retry with the Manager 2 password)
+//   CREATED                      in transit in Shopify
+//   RECEIVING / RECEIVE_ERROR    being received / failed (retry)
+//   RECEIVED                     received in Shopify
+//   UNLINKED                     detached by an admin; a new transfer can be created
+// Every Shopify call runs outside the database transaction: the row is claimed first (status + attempt_at),
+// so two people pressing at the same time cannot create two transfers. Retries are safe because the
+// mutations carry idempotency keys and the transfer is tagged, so an earlier attempt is found and reused.
+const CLAIM_STALE_MS = 5 * 60 * 1000;  // longer than an Edge Function can run
+const normUpc = (v) => String(v || '').replace(/^0+/, '');
+
+function transferOut(row) {
+  if (!row || row.status === 'UNLINKED') return null;
+  return {
+    status: row.status,
+    transferId: row.transfer_id || '',
+    name: row.transfer_name || '',
+    totalQty: Number(row.total_qty || 0),
+    receivedQty: row.received_qty == null ? null : Number(row.received_qty),
+    error: row.error || '',
+    createdBy: row.created_by || '', createdAt: row.created_at,
+    receivedBy: row.received_by || '', receivedAt: row.received_at,
+    busy: (row.status === 'CREATING' || row.status === 'RECEIVING') && claimFresh(row)
+  };
+}
+
+function claimFresh(row) {
+  return !!row.attempt_at && Date.now() - new Date(row.attempt_at).getTime() < CLAIM_STALE_MS;
+}
+
+async function loadTransferRow(tx, shipmentId, lock) {
+  const rows = await tx.query(`select * from trk.shopify_transfers where shipment_id = $1${lock ? ' for update' : ''}`, [shipmentId]);
+  return rows[0] || null;
+}
+
+function requireShopify(ctx) {
+  if (!ctx.shopify) throw new UserError('Shopify is not connected. Ask an admin to add the Shopify settings.');
+  if (ctx.shopify.configError) throw new UserError(ctx.shopify.configError);
+  return ctx.shopify;
+}
+
+// Deterministic UUID-shaped key: the same shipment + transfer generation + purpose always gives the same key
+async function stableKey(...parts) {
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(parts.join('|'))));
+  const hex = Array.from(bytes.slice(0, 16), (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+// Start (or restart) a transfer for this shipment; returns true when there is something to create
+async function queueTransfer(tx, shipmentId, user) {
+  const row = await loadTransferRow(tx, shipmentId, true);
+  if (!row) {
+    await tx.query(
+      `insert into trk.shopify_transfers (shipment_id, status, generation, created_by) values ($1, 'PENDING', 1, $2)`,
+      [shipmentId, user]
+    );
+    return true;
+  }
+  if (row.status === 'UNLINKED') {
+    await tx.query(
+      `update trk.shopify_transfers set status = 'PENDING', generation = generation + 1, transfer_id = null, transfer_name = null,
+         shipment_gid = null, lines = null, total_qty = null, received_qty = null, error = null, attempt_at = null,
+         created_by = $2, created_at = null, received_by = null, received_at = null, updated_at = now()
+       where shipment_id = $1`,
+      [shipmentId, user]
+    );
+    return true;
+  }
+  if (row.status === 'PENDING' || row.status === 'ERROR' || (row.status === 'CREATING' && !claimFresh(row))) {
+    await tx.query("update trk.shopify_transfers set status = 'PENDING', created_by = $2, updated_at = now() where shipment_id = $1", [shipmentId, user]);
+    return true;
+  }
+  return false;
+}
+
+// Renfrew units per UPC (the larger of plan and actual allocation, as in the 4b count)
+function renfrewItems(lines) {
+  const byUpc = {};
+  for (const l of lines) {
+    if (!(l.renfrewQty > 0)) continue;
+    const key = normUpc(l.upc);
+    const item = byUpc[key] || (byUpc[key] = { upc: l.upc, productName: l.productName, qty: 0 });
+    item.qty += l.renfrewQty;
+  }
+  return Object.values(byUpc);
+}
+
+// Creates the Shopify transfer for a PENDING row. Never throws for Shopify problems: they are saved on the row.
+async function runCreateTransfer(db, ctx, shipmentId) {
+  const claim = await db.transaction(async (tx) => {
+    const row = await loadTransferRow(tx, shipmentId, true);
+    if (!row || row.status !== 'PENDING') return null;
+    const shipment = shipmentOut(await loadShipmentRow(tx, shipmentId));
+    if (!shipment.steps['4a']) return null;
+    const items = renfrewItems(await loadLines(tx, shipmentId));
+    await tx.query("update trk.shopify_transfers set status = 'CREATING', attempt_at = now(), error = null, updated_at = now() where shipment_id = $1", [shipmentId]);
+    return { row, shipment, items };
+  });
+  if (!claim) return;
+  const { row, shipment, items } = claim;
+  const generation = Number(row.generation);
+  const known = { transferId: row.transfer_id || '', transferName: row.transfer_name || '' };
+  try {
+    const shopify = requireShopify(ctx);
+    if (!items.length) throw new UserError('This shipment has no Renfrew items to transfer.');
+    const missingUpc = items.filter((i) => !normUpc(i.upc));
+    if (missingUpc.length) throw new UserError('No UPC for: ' + missingUpc.map((i) => i.productName || '(unnamed)').join(', '));
+
+    // UPC -> Shopify inventory item; stop if any barcode is missing or used by more than one variant
+    const variants = await shopify.variantsByBarcode(items.map((i) => i.upc));
+    const problems = [];
+    const byItem = {};
+    for (const i of items) {
+      const found = variants[i.upc] || [];
+      if (!found.length) { problems.push(`${i.productName || i.upc} (${i.upc}): no Shopify product with this barcode`); continue; }
+      if (found.length > 1) { problems.push(`${i.productName || i.upc} (${i.upc}): ${found.length} Shopify variants share this barcode`); continue; }
+      const v = found[0];
+      const line = byItem[v.inventoryItemId] || (byItem[v.inventoryItemId] = { inventoryItemId: v.inventoryItemId, upcs: [], productName: i.productName || v.name, label: i.productName || v.name, qty: 0 });
+      line.upcs.push(i.upc);
+      line.qty += i.qty;
+    }
+    if (problems.length) throw new UserError('Cannot create the Shopify transfer. ' + problems.join('; '));
+    const lines = Object.values(byItem);
+    const totalQty = lines.reduce((n, l) => n + l.qty, 0);
+
+    // Reuse a transfer an earlier attempt already created
+    const tag = 'trk-' + (await stableKey('tag', shipmentId, generation)).replace(/-/g, '').slice(0, 16);
+    let transfer = known.transferId ? await shopify.getTransfer(known.transferId) : null;
+    if (transfer && transfer.status === 'CANCELED') transfer = null;
+    if (!transfer) transfer = await shopify.findTransferByTag(tag);
+    if (!transfer) {
+      transfer = await shopify.createTransfer({
+        items: lines,
+        referenceName: cleanText(`${shipment.supplier} ${shipment.name}`, 60),
+        note: cleanText(`Receiving Tracker: ${shipment.supplier} · ${shipment.name}. Created at step 4a by ${row.created_by || ''}.`, 250),
+        tag,
+        key: await stableKey('transfer', shipmentId, generation)
+      });
+    }
+    known.transferId = transfer.id;
+    known.transferName = transfer.name;
+    let shipped = transfer.shipments[0] || null;
+    if (!shipped) {
+      shipped = await shopify.createInTransitShipment({ transferId: transfer.id, items: lines, key: await stableKey('shipment', shipmentId, generation) });
+    }
+    await db.transaction(async (tx) => {
+      await tx.query(
+        `update trk.shopify_transfers set status = 'CREATED', transfer_id = $2, transfer_name = $3, shipment_gid = $4, lines = $5::jsonb,
+           total_qty = $6::int, error = null, created_at = now(), updated_at = now()
+         where shipment_id = $1`,
+        [shipmentId, transfer.id, transfer.name, shipped.id, JSON.stringify(lines.map(({ label, ...l }) => l)), totalQty]
+      );
+      await logEvent(tx, shipmentId, '4a', 'SHOPIFY', row.created_by || SYSTEM_USER,
+        `Shopify transfer ${transfer.name} created: ${totalQty} pcs Marine Drive → Renfrew (in transit)`);
+    });
+  } catch (error) {
+    const message = transferErrorMessage(error);
+    if (!(error && (error.name === 'UserError' || error.name === 'ShopifyError'))) console.error('runCreateTransfer', error);
+    await db.transaction(async (tx) => {
+      await tx.query(
+        `update trk.shopify_transfers set status = 'ERROR', error = $2, transfer_id = nullif($3, ''), transfer_name = nullif($4, ''), updated_at = now()
+         where shipment_id = $1`,
+        [shipmentId, message, known.transferId, known.transferName]
+      );
+      await logEvent(tx, shipmentId, '4a', 'SHOPIFY_ERROR', row.created_by || SYSTEM_USER, message);
+    });
+  }
+}
+
+function transferErrorMessage(error) {
+  if (error && (error.name === 'UserError' || error.name === 'ShopifyError')) return cleanText(error.message, 1000);
+  return 'Unexpected error: ' + cleanText(error && error.message ? error.message : String(error), 300);
+}
+
+// Shopify actions run their own transactions (Shopify is called between them)
+const SHOPIFY_ACTIONS = {
+  // Create the transfer when step 4a was done before Shopify was connected, or retry after an error (Manager 2 password)
+  async shopifyCreateTransfer(db, { shipmentId, password }, ctx) {
+    const id = cleanText(shipmentId, 300);
+    await db.transaction(async (tx) => {
+      await checkAccess(tx, ctx);
+      const user = requireUser(ctx);
+      requireShopify(ctx);
+      await tx.query('select 1 from trk.shipments where shipment_id = $1 for update', [id]);
+      const shipment = shipmentOut(await loadShipmentRow(tx, id));
+      if (!shipment.steps['4a']) throw new UserError('Step 4a "Listed Online" must be done first.');
+      if (shipment.renfrewNA) throw new UserError('This shipment has no items for Renfrew.');
+      const row = await loadTransferRow(tx, id, true);
+      if (row && row.status !== 'UNLINKED' && row.status !== 'ERROR' && row.status !== 'PENDING' && !(row.status === 'CREATING' && !claimFresh(row))) {
+        throw new UserError(row.status === 'CREATING' ? 'The Shopify transfer is being created. Refresh in a few minutes.' : `This shipment already has Shopify transfer ${row.transfer_name}.`);
+      }
+      await verifyPassword(tx, ctx, ['pw_step4a'], password, 'Manager 2 (Listed Online)');
+      await queueTransfer(tx, id, user);
+    });
+    await runCreateTransfer(db, ctx, id);
+    const result = await db.transaction((tx) => API.getShipment(tx, { shipmentId: id }));
+    if (result.shopifyTransfer && result.shopifyTransfer.status === 'ERROR') throw new UserError(result.shopifyTransfer.error);
+    return result;
+  },
+
+  // Step 5: receive the transfer at Renfrew with the quantities counted in 4b (no manager password, like step 5 itself)
+  async shopifyReceiveTransfer(db, { shipmentId }, ctx) {
+    const id = cleanText(shipmentId, 300);
+    let shopify = null;
+    const claim = await db.transaction(async (tx) => {
+      await checkAccess(tx, ctx);
+      const user = requireUser(ctx);
+      shopify = requireShopify(ctx);
+      await tx.query('select 1 from trk.shipments where shipment_id = $1 for update', [id]);
+      const shipment = shipmentOut(await loadShipmentRow(tx, id));
+      if (!shipment.steps['4a'] || !shipment.steps['4b']) throw new UserError('Steps 4a and 4b must be done before the transfer can be received.');
+      const row = await loadTransferRow(tx, id, true);
+      if (!row || row.status === 'UNLINKED' || !row.shipment_gid) throw new UserError('This shipment has no Shopify transfer in transit.');
+      if (row.status === 'RECEIVED') throw new UserError(`Shopify transfer ${row.transfer_name} was already received by ${row.received_by}.`);
+      if (row.status === 'RECEIVING' && claimFresh(row)) throw new UserError('This transfer is being received. Refresh in a few minutes.');
+      const checks = await loadChecks(tx, id);
+      await tx.query("update trk.shopify_transfers set status = 'RECEIVING', attempt_at = now(), error = null, updated_at = now() where shipment_id = $1", [id]);
+      return { row, checks, user };
+    });
+    const { row, checks, user } = claim;
+    try {
+      // Receive what was counted in 4b, up to what was sent; a shortage stays unreceived in Shopify
+      const counted = {};
+      for (const c of checks) counted[normUpc(c.upc)] = (counted[normUpc(c.upc)] || 0) + Number(c.counted_qty);
+      const target = {};
+      for (const l of row.lines || []) {
+        const n = l.upcs.reduce((sum, upc) => sum + (counted[normUpc(upc)] || 0), 0);
+        target[l.inventoryItemId] = Math.min(l.qty, n);
+      }
+      const remote = await shopify.getShipment(row.shipment_gid);
+      const items = [];
+      let shipped = 0;
+      let accepted = 0;
+      for (const l of remote.lines) {
+        shipped += l.quantity;
+        const want = Math.max(0, (target[l.inventoryItemId] || 0) - l.accepted);
+        const qty = Math.min(want, l.unreceived);
+        accepted += l.accepted + qty;
+        if (qty > 0) items.push({ shipmentLineItemId: l.id, qty });
+      }
+      if (items.length) {
+        // The key follows the exact request, so a retry of the same request is not applied twice
+        await shopify.receive({ shipmentId: row.shipment_gid, items, key: await stableKey('receive', id, row.generation, JSON.stringify(items)) });
+      }
+      const short = shipped - accepted;
+      const note = `Shopify transfer ${row.transfer_name} received at Renfrew: ${accepted}/${shipped} pcs` +
+        (short > 0 ? `; ${short} pcs not received (still open in Shopify)` : '');
+      await db.transaction(async (tx) => {
+        await tx.query(
+          `update trk.shopify_transfers set status = 'RECEIVED', received_qty = $2::int, received_by = $3, received_at = now(), error = null, updated_at = now()
+           where shipment_id = $1`,
+          [id, accepted, user]
+        );
+        await logEvent(tx, id, '5', 'SHOPIFY', user, note);
+      });
+    } catch (error) {
+      const message = transferErrorMessage(error);
+      if (!(error && (error.name === 'UserError' || error.name === 'ShopifyError'))) console.error('shopifyReceiveTransfer', error);
+      await db.transaction(async (tx) => {
+        await tx.query("update trk.shopify_transfers set status = 'RECEIVE_ERROR', error = $2, updated_at = now() where shipment_id = $1", [id, message]);
+        await logEvent(tx, id, '5', 'SHOPIFY_ERROR', user, message);
+      });
+      throw new UserError(message);
+    }
+    return db.transaction((tx) => API.getShipment(tx, { shipmentId: id }));
+  },
+
+  // Settings page: check the Shopify settings and sign-in without changing anything
+  async shopifyTestConnection(db, args, ctx) {
+    await db.transaction(async (tx) => {
+      await checkAccess(tx, ctx);
+      requireUser(ctx);
+    });
+    const shopify = requireShopify(ctx);
+    try {
+      const r = await shopify.testConnection();
+      return { ok: true, shopName: r.shopName, domain: r.domain };
+    } catch (error) {
+      throw new UserError(transferErrorMessage(error));
+    }
+  },
+
+  // Detach the transfer (after canceling it in Shopify) so a new one can be created (admin password)
+  async shopifyUnlinkTransfer(db, { shipmentId, adminPassword, note }, ctx) {
+    const id = cleanText(shipmentId, 300);
+    await db.transaction(async (tx) => {
+      await checkAccess(tx, ctx);
+      const user = requireUser(ctx);
+      const row = await loadTransferRow(tx, id, true);
+      if (!row || row.status === 'UNLINKED') throw new UserError('This shipment has no Shopify transfer.');
+      if (row.status === 'RECEIVED') throw new UserError('This transfer was already received in Shopify and cannot be unlinked.');
+      if ((row.status === 'CREATING' || row.status === 'RECEIVING') && claimFresh(row)) throw new UserError('Shopify is busy with this transfer. Try again in a few minutes.');
+      await verifyPassword(tx, ctx, await adminKeys(tx), adminPassword, 'manager');
+      await tx.query("update trk.shopify_transfers set status = 'UNLINKED', updated_at = now() where shipment_id = $1", [id]);
+      await logEvent(tx, id, '4a', 'SHOPIFY_UNLINK', user,
+        cleanText(`Unlinked Shopify transfer ${row.transfer_name || '(not created)'}` + (note ? ' · ' + note : ''), 500));
+    });
+    return db.transaction((tx) => API.getShipment(tx, { shipmentId: id }));
+  }
+};
+
 // ---------- API ----------
 
 const API = {
-  async ping(tx) {
+  async ping(tx, args, ctx) {
     const rows = await tx.query('select key from trk.settings where key = any(array(select json_array_elements_text($1::text::json)))', [JSON.stringify(PASSWORD_KEYS)]);
-    return { ok: true, passwordsSet: rows.map((r) => r.key) };
+    const shopify = ctx.shopify
+      ? { connected: !ctx.shopify.configError, store: ctx.shopify.store, error: ctx.shopify.configError || '' }
+      : { connected: false, store: '', error: '' };
+    return { ok: true, passwordsSet: rows.map((r) => r.key), shopify };
   },
 
   // Light status for the inventory system's Qty Confirmed button
@@ -498,6 +864,7 @@ const API = {
        where st.shipment_id = $1 order by loc.sort, st.location_code, st.product_name`, [id]
     );
     const labels = await shipmentLabels(tx, [id]);
+    const transfer = transferOut(await loadTransferRow(tx, id, false));
     const lineById = {};
     for (const l of lines) lineById[l.lineId] = l;
     return {
@@ -514,7 +881,8 @@ const API = {
           inventoryQty, changed: !!shipment.steps['4b'] && inventoryQty !== Number(c.expected_qty)
         };
       }),
-      stock: stock.map((r) => stockOut(r, labels))
+      stock: stock.map((r) => stockOut(r, labels)),
+      shopifyTransfer: transfer
     };
   },
 
@@ -575,7 +943,7 @@ const API = {
     }
     note = cleanText(note, 500);
 
-    if (STEP_PASSWORD[step]) await verifyPassword(tx, [STEP_PASSWORD[step][0]], password, STEP_PASSWORD[step][1]);
+    if (STEP_PASSWORD[step]) await verifyPassword(tx, ctx, [STEP_PASSWORD[step][0]], password, STEP_PASSWORD[step][1]);
     if (step === '3' && shipment.whStatus !== 'FINALIZED' && !force) {
       throw new UserError('This shipment is not finalized in the inventory system yet. Confirm inventory anyway?', 'CONFIRM');
     }
@@ -599,10 +967,13 @@ const API = {
       );
       const unputQty = Number(unput[0].n);
       const pendingQty = Number(pending[0].n);
-      if ((unputQty > 0 || pendingQty > 0) && !force) {
+      const transfer = transferOut(await loadTransferRow(tx, id, false));
+      const notReceived = !!transfer && transfer.status !== 'RECEIVED';
+      if ((unputQty > 0 || pendingQty > 0 || notReceived) && !force) {
         const parts = [];
         if (unputQty > 0) parts.push(`${unputQty} unit(s) not put away yet`);
         if (pendingQty > 0) parts.push(`${pendingQty} unit(s) still in Pending (not scanned to the store floor)`);
+        if (notReceived) parts.push(`Shopify transfer${transfer.name ? ' ' + transfer.name : ''} is not marked received yet`);
         throw new UserError(parts.join('; ') + '. Complete and hide this shipment anyway?', 'CONFIRM');
       }
       await tx.query('update trk.shipments set s5_note = $2 where shipment_id = $1', [id, note || null]);
@@ -610,6 +981,14 @@ const API = {
 
     await setStep(tx, id, step, user);
     await logEvent(tx, id, step, force ? 'DONE_FORCED' : 'DONE', user, note);
+
+    // Renfrew items: create the Shopify transfer Marine Drive -> Renfrew once this step is saved
+    if (step === '4a' && !shipment.renfrewNA && ctx.shopify && await queueTransfer(tx, id, user)) {
+      ctx.after(async (db) => {
+        await runCreateTransfer(db, ctx, id);
+        return db.transaction((t) => API.getShipment(t, { shipmentId: id }));
+      });
+    }
 
     // No Renfrew items: 4a finishes the shipment
     if (step === '4a' && shipment.renfrewNA) {
@@ -634,7 +1013,7 @@ const API = {
     const autoNA = step === '4a' && row.s5_by === SYSTEM_USER && row.s4b_by === SYSTEM_USER;
     const blocking = LATER[step].filter((s) => shipment.steps[s] && !(autoNA && s === '5'));
     if (blocking.length) throw new UserError(`Undo the later step(s) first: ${blocking.join(', ')}.`);
-    if (STEP_PASSWORD[step]) await verifyPassword(tx, [STEP_PASSWORD[step][0]], password, STEP_PASSWORD[step][1]);
+    if (STEP_PASSWORD[step]) await verifyPassword(tx, ctx, [STEP_PASSWORD[step][0]], password, STEP_PASSWORD[step][1]);
     if (step === '4b') await tx.query('update trk.shipments set s4b_note = null where shipment_id = $1', [id]);
     if (step === '5') await tx.query('update trk.shipments set s5_note = null where shipment_id = $1', [id]);
     if (autoNA) {
@@ -913,14 +1292,14 @@ const API = {
   async setPassword(tx, { key, value, adminPassword }, ctx) {
     requireUser(ctx);
     if (!PASSWORD_KEYS.includes(key)) throw new UserError('Invalid password type.');
-    await verifyPassword(tx, await adminKeys(tx), adminPassword, 'manager');
+    await verifyPassword(tx, ctx, await adminKeys(tx), adminPassword, 'manager');
     value = String(value || '');
     if (!value) {
       if (key !== 'pw_access') throw new UserError('Password cannot be blank.');
       await tx.query("delete from trk.settings where key = 'pw_access'");
       return { ok: true };
     }
-    if (value.length < 4) throw new UserError('Password must be at least 4 characters.');
+    if (value.length < MIN_PASSWORD_LENGTH) throw new UserError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
     await tx.query(
       `insert into trk.settings (key, value) values ($1, extensions.crypt($2::text, extensions.gen_salt('bf', 8)))
        on conflict (key) do update set value = excluded.value, updated_at = now()`,
