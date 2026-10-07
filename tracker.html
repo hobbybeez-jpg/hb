@@ -117,7 +117,8 @@
   /* Renfrew map */
   .racks { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
   .rack { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
-  .rack h3 { margin: 0 0 8px; font-size: 18px; display: flex; justify-content: space-between; align-items: baseline; }
+  .rack h3 { margin: 0; font-size: 17px; line-height: 1.25; }
+  .rack-sub { font-size: 12px; color: var(--muted); margin: 2px 0 8px; }
   .rack.pending { border-color: var(--pending); background: var(--pending-bg); }
   .cells { display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); }
   .cell { border: 1px solid #cdd3dc; background: #f8f9fb; border-radius: 8px; padding: 8px 6px; text-align: center; cursor: pointer; }
@@ -882,7 +883,8 @@ async function runSearch(upc) {
 // ---------------- Renfrew stock ----------------
 function allCells() { return state.map ? state.map.racks.flatMap((r) => r.cells) : []; }
 function locationOptions(selected) {
-  return allCells().map((c) => `<option value="${esc(c.code)}" ${c.code === selected ? 'selected' : ''}>${esc(c.code)}${c.code === 'PENDING' ? ' (holding)' : ''}</option>`).join('');
+  return (state.map ? state.map.racks : []).flatMap((r) => r.cells.map((c) =>
+    `<option value="${esc(c.code)}" ${c.code === selected ? 'selected' : ''}>${esc(c.code)} · ${esc(r.name || r.rack)}${c.code === 'PENDING' ? ' (holding)' : ''}</option>`)).join('');
 }
 async function ensureMap() { if (!state.map) state.map = await api('renfrewMap'); return state.map; }
 
@@ -902,9 +904,10 @@ function renderMap() {
   $('#racks').innerHTML = state.map.racks.map((r) => {
     const total = r.cells.reduce((n, c) => n + c.totalQty, 0);
     return `<div class="rack ${r.rack === 'PENDING' ? 'pending' : ''}">
-      <h3>${r.rack === 'PENDING' ? 'Pending' : 'Rack ' + esc(r.rack)}<span class="small muted">${total} units</span></h3>
-      <div class="cells">${r.cells.map((c) => `<div class="cell ${c.totalQty ? 'has' : ''} ${state.findCodes.has(c.code) ? 'hit' : ''} ${state.selectedCell === c.code ? 'sel' : ''}" data-code="${esc(c.code)}">
-        <div class="c">${esc(c.code)}</div><div class="q">${c.items.length} SKU · ${c.totalQty} u</div></div>`).join('')}</div></div>`;
+      <h3>${esc(r.name || r.rack)}</h3>
+      <div class="rack-sub">${r.rack !== 'PENDING' ? `${esc(r.rack)} · ` : ''}${total} pcs</div>
+      <div class="cells">${r.cells.map((c) => `<div title="${c.items.length} SKU · ${c.totalQty} pcs" class="cell ${c.totalQty ? 'has' : ''} ${state.findCodes.has(c.code) ? 'hit' : ''} ${state.selectedCell === c.code ? 'sel' : ''}" data-code="${esc(c.code)}">
+        <div class="c">${esc(c.code)}</div><div class="q">${c.totalQty} pcs</div></div>`).join('')}</div></div>`;
   }).join('');
   $$('#racks .cell').forEach((el) => (el.onclick = () => { state.selectedCell = state.selectedCell === el.dataset.code ? '' : el.dataset.code; renderMap(); }));
   renderCellPanel();
@@ -913,7 +916,7 @@ function renderCellPanel() {
   const cell = allCells().find((c) => c.code === state.selectedCell);
   const box = $('#cellPanel');
   if (!cell) { box.innerHTML = ''; return; }
-  box.innerHTML = `<div class="section-title">${esc(cell.code)} <span class="small muted">${cell.items.length} SKU · ${cell.totalQty} units</span>
+  box.innerHTML = `<div class="section-title">${esc(cell.code)} <span class="small muted">${cell.items.length} SKU · ${cell.totalQty} pcs</span>
       <span class="grow"></span><button class="btn small" type="button" id="closeCell">Close</button></div>
     <div class="list">${cell.items.map((x) => `<div class="item ${state.findUpc && upcEq(x.upc, state.findUpc) ? 'flash' : ''}">
       <div class="nm"><b>${esc(x.productName || '(no name)')}</b><span class="mono muted">${esc(x.upc)}</span>
@@ -931,7 +934,7 @@ function renderCellPanel() {
 function openMove(item) {
   const m = modal({ title: 'Move Item', narrow: true,
     body: `<div><b>${esc(item.productName)}</b><div class="mono muted">${esc(item.upc)} · now in ${esc(item.locationCode)} × ${item.qty}</div></div>
-      <label class="f">Move to<select class="inp" id="mvTo">${locationOptions(item.locationCode === 'PENDING' ? 'N' : 'PENDING')}</select></label>
+      <label class="f">Move to<select class="inp" id="mvTo">${locationOptions(item.locationCode === 'PENDING' ? 'N-1' : 'PENDING')}</select></label>
       <label class="f">Qty<input class="inp qty" id="mvQty" type="number" min="1" max="${item.qty}" value="${item.qty}" /></label>`,
     foot: '<button class="btn" type="button" data-a="cancel">Cancel</button><button class="btn primary" type="button" data-a="ok">Move</button>' });
   $('[data-a=cancel]', m.foot).onclick = m.close;
@@ -1056,7 +1059,7 @@ $('#btnAddStock').onclick = async () => {
       <form class="scanbox" id="addScan"><input class="inp" id="addUpc" inputmode="numeric" autocomplete="off" placeholder="UPC" />
         <button class="btn scan-btn" type="button">📷</button></form>
       <label class="f">Product name<input class="inp" id="addName" placeholder="Filled in after scanning" /></label>
-      <label class="f">Location<select class="inp" id="addLoc">${locationOptions(state.selectedCell || 'N')}</select></label>
+      <label class="f">Location<select class="inp" id="addLoc">${locationOptions(state.selectedCell || 'N-1')}</select></label>
       <label class="f">Qty<input class="inp qty" id="addQty" type="number" min="1" value="1" /></label>`,
     foot: '<button class="btn" type="button" data-a="cancel">Cancel</button><button class="btn primary" type="button" data-a="ok">Add</button>' });
   const upcInput = $('#addUpc', m.body);
@@ -1080,23 +1083,35 @@ $('#btnAddStock').onclick = async () => {
 // Manage locations
 $('#btnLocations').onclick = async () => {
   try { await ensureMap(); } catch (e) { toast(e.message, 'bad'); return; }
-  const racks = state.map.racks.map((r) => r.rack);
+  const racks = state.map.racks;
   const m = modal({ title: 'Manage Locations', narrow: true,
-    body: `<div class="small muted">Add a location under a rack (e.g. N-1, N-2), or add a new rack (rack name = location code).</div>
-      <label class="f">Rack<input class="inp" id="locRack" list="rackList" placeholder="e.g. N" /></label>
-      <datalist id="rackList">${racks.map((r) => `<option value="${esc(r)}">`).join('')}</datalist>
-      <label class="f">Location code<input class="inp" id="locCode" placeholder="e.g. N-1" /></label>
+    body: `<div class="small muted">Add a box to a rack (e.g. N-2), or type a new rack code to create a new rack.</div>
+      <label class="f">Rack code<input class="inp" id="locRack" list="rackList" placeholder="e.g. N" autocomplete="off" /></label>
+      <datalist id="rackList">${racks.map((r) => `<option value="${esc(r.rack)}">${esc(r.name || r.rack)}</option>`).join('')}</datalist>
+      <label class="f">Rack name (new rack only)<input class="inp" id="locRackName" placeholder="e.g. Nendoroid" /></label>
+      <label class="f">Box code<input class="inp" id="locCode" placeholder="e.g. N-2" /></label>
       <div class="row"><button class="btn primary" type="button" id="locAdd">Add</button><button class="btn danger" type="button" id="locDel">Remove location (must be empty)</button></div>`,
     foot: '<button class="btn" type="button" data-a="close">Close</button>' });
   $('[data-a=close]', m.foot).onclick = m.close;
-  $('#locRack', m.body).oninput = (e) => { const c = $('#locCode', m.body); if (!c.dataset.touched) c.value = e.target.value.toUpperCase() + '-'; };
+  // Suggest the next free box number for the rack (N-1, N-2 -> N-3)
+  $('#locRack', m.body).oninput = (e) => {
+    const code = e.target.value.trim().toUpperCase();
+    const rack = racks.find((r) => r.rack === code);
+    const nameInput = $('#locRackName', m.body);
+    nameInput.disabled = Boolean(rack);
+    nameInput.value = rack ? (rack.name || rack.rack) : '';
+    const c = $('#locCode', m.body);
+    if (c.dataset.touched || !code) return;
+    const used = rack ? rack.cells.map((x) => (x.code.match(new RegExp('^' + code.replace(/[^A-Z0-9]/g, '') + '-(\\d+)$')) || [])[1]).filter(Boolean).map(Number) : [];
+    c.value = `${code}-${used.length ? Math.max(...used) + 1 : 1}`;
+  };
   $('#locCode', m.body).oninput = (e) => (e.target.dataset.touched = '1');
   const run = async (fn) => {
     const code = $('#locCode', m.body).value.trim().replace(/-$/, '');
     if (!code) { toast('Enter a location code', 'bad'); return; }
     if (fn === 'removeLocation' && !confirm(`Remove location ${code.toUpperCase()}?`)) return;
     try {
-      state.map = await api(fn, { code, rack: $('#locRack', m.body).value.trim() || code });
+      state.map = await api(fn, { code, rack: $('#locRack', m.body).value.trim() || code, rackName: $('#locRackName', m.body).value.trim() });
       toast(fn === 'addLocation' ? 'Added ' + code.toUpperCase() : 'Removed ' + code.toUpperCase(), 'ok');
       if (state.tab === 'renfrew') renderMap();
     } catch (e) { toast(e.message, 'bad'); }

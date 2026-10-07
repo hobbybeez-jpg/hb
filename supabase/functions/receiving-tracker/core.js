@@ -547,7 +547,13 @@ const API = {
   // ---------- Renfrew stock ----------
 
   async renfrewMap(tx) {
-    const locations = await tx.query('select * from trk.renfrew_locations where active order by sort, code');
+    // Racks in their set order; boxes in natural order (N-1, N-2, ... N-10)
+    const locations = await tx.query(
+      `select loc.*, coalesce(r.name, loc.rack) as rack_name, coalesce(r.sort, loc.sort) as rack_sort
+       from trk.renfrew_locations loc left join trk.racks r on r.rack = loc.rack
+       where loc.active
+       order by rack_sort, loc.rack, coalesce(substring(loc.code from '-(\\d+)$')::int, 0), loc.code`
+    );
     const stock = await tx.query(
       `select st.* from trk.renfrew_stock st join trk.renfrew_locations loc on loc.code = st.location_code
        where loc.active order by st.location_code, st.product_name, st.upc`
@@ -559,7 +565,7 @@ const API = {
     const rackIndex = {};
     for (const loc of locations) {
       if (!rackIndex[loc.rack]) {
-        rackIndex[loc.rack] = { rack: loc.rack, sort: Number(loc.sort), cells: [] };
+        rackIndex[loc.rack] = { rack: loc.rack, name: loc.rack_name, sort: Number(loc.rack_sort), cells: [] };
         racks.push(rackIndex[loc.rack]);
       }
       const items = byCode[loc.code] || [];
@@ -697,10 +703,11 @@ const API = {
 
   // ---------- Admin ----------
 
-  async addLocation(tx, { code, rack }, ctx) {
+  async addLocation(tx, { code, rack, rackName }, ctx) {
     requireUser(ctx);
     code = cleanText(code, 20).toUpperCase();
     rack = cleanText(rack || code, 20).toUpperCase();
+    rackName = cleanText(rackName, 60);
     if (!/^[A-Z0-9][A-Z0-9-]*$/.test(code) || !/^[A-Z0-9][A-Z0-9-]*$/.test(rack)) {
       throw new UserError('Location codes may only use letters, digits and -.');
     }
@@ -713,6 +720,13 @@ const API = {
     const sort = Number(sortRows[0].n) ? Number(sortRows[0].s) : Number(fallback[0].s);
     if (existing.length) await tx.query('update trk.renfrew_locations set active = true, rack = $2 where code = $1', [code, rack]);
     else await tx.query('insert into trk.renfrew_locations (code, rack, sort) values ($1, $2, $3::int)', [code, rack, sort]);
+    // A new rack goes before Pending; its name defaults to the rack code
+    await tx.query(
+      `insert into trk.racks (rack, name, sort)
+       values ($1, coalesce(nullif($2, ''), $1), (select coalesce(max(sort), 0) + 10 from trk.racks where rack <> 'PENDING'))
+       on conflict (rack) do update set name = coalesce(nullif($2, ''), trk.racks.name)`,
+      [rack, rackName]
+    );
     return API.renfrewMap(tx);
   },
 
