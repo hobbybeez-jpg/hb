@@ -1164,6 +1164,8 @@ async function runSearch(upc) {
 
 // ---------------- Renfrew stock ----------------
 function allCells() { return state.map ? state.map.racks.flatMap((r) => r.cells) : []; }
+// Default put-away box (first box of the Main Rack), reported by the server
+function defaultBox() { return (state.map && state.map.defaultBox) || ''; }
 function locationOptions(selected, { noPending = false, placeholder = '' } = {}) {
   return (placeholder ? `<option value="">${esc(placeholder)}</option>` : '') +
     (state.map ? state.map.racks : []).filter((r) => !noPending || r.rack !== 'PENDING').flatMap((r) => r.cells.map((c) =>
@@ -1219,7 +1221,7 @@ function renderCellPanel() {
 function openMove(item) {
   const m = modal({ title: 'Move Item', narrow: true,
     body: `<div><b>${esc(item.productName)}</b><div class="mono muted">${esc(item.upc)} · now in ${esc(item.locationCode)} × ${item.qty}</div></div>
-      <label class="f">Move to<select class="inp" id="mvTo">${locationOptions(item.locationCode === 'PENDING' ? 'N-1' : 'PENDING')}</select></label>
+      <label class="f">Move to<select class="inp" id="mvTo">${locationOptions(item.locationCode === 'PENDING' ? defaultBox() : 'PENDING')}</select></label>
       <label class="f">Qty<input class="inp qty" id="mvQty" type="number" min="1" max="${item.qty}" value="${item.qty}" /></label>`,
     foot: '<button class="btn" type="button" data-a="cancel">Cancel</button><button class="btn primary" type="button" data-a="ok">Move</button>' });
   $('[data-a=cancel]', m.foot).onclick = m.close;
@@ -1357,7 +1359,7 @@ async function openBatchScan(mode, onlyShipmentId) {
   let saved = false;
   const body = document.createElement('div');
   body.className = 'list';
-  const start = state.selectedCell && state.map.racks.some((r) => r.cells.some((c) => c.code === state.selectedCell)) ? state.selectedCell : '';
+  const start = state.selectedCell && state.map.racks.some((r) => r.cells.some((c) => c.code === state.selectedCell)) ? state.selectedCell : defaultBox();
   body.innerHTML = `
     ${stock()
       ? `<div class="note-box"><b>Existing stock only</b>: items already at Renfrew that are not from any shipment (e.g. stock-count corrections).
