@@ -58,6 +58,21 @@
   nav.tabs button.active { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
   nav.tabs .badge { background: var(--now); color: #1a1a1a; border-radius: 999px; padding: 0 7px; font-size: 11px; margin-left: 6px; font-weight: 700; }
 
+  /* Reminder lights (pinned under the tabs): one per step that has shipments waiting */
+  .tasks { max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 6px 20px 10px; }
+  .task { display: flex; align-items: center; gap: 10px; background: #fff; border: 0; box-shadow: var(--shadow); border-radius: var(--radius-sm);
+    padding: 7px 10px; text-align: left; min-width: 0; color: var(--subtle); }
+  .task:hover { box-shadow: var(--shadow-hover); }
+  .task .light { flex: none; width: 30px; height: 30px; border-radius: 50%; background: var(--todo); color: #fff;
+    display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; }
+  .task .tl { min-width: 0; line-height: 1.25; }
+  .task .tl b { display: block; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .task .tl span { font-size: 11.5px; white-space: nowrap; }
+  .task.on { color: var(--ink); background: var(--now-tint); }
+  .task.on .light { background: var(--now); color: #1a1a1a; box-shadow: 0 0 0 4px rgba(232,164,0,.18); }
+  .task.sel { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .step-filter { background: var(--ink); color: #fff; border: 0; border-radius: 999px; padding: 5px 12px; font-size: 13px; }
+
   main { max-width: 1200px; margin: 0 auto; padding: 20px; }
   .card { background: var(--card); border: 0; box-shadow: var(--shadow); border-radius: var(--radius); padding: 16px; }
   .section-title { font-size: 14px; font-weight: 650; margin: 24px 0 10px; display: flex; align-items: center; gap: 8px; }
@@ -240,6 +255,11 @@
   .ship-card .chev { color: var(--subtle); font-size: 22px; line-height: 1; }
   .ship-card .progress { height: 10px; }
   @media (max-width: 760px) {
+    .tasks { padding: 4px 12px 8px; gap: 6px; }
+    .task { flex-direction: column; gap: 4px; padding: 6px 4px; text-align: center; }
+    .task .light { width: 26px; height: 26px; font-size: 13px; }
+    .task .tl span { display: none; }
+    .task .tl b { font-size: 11px; white-space: normal; }
     main { padding: 12px; }
     .action-grid { grid-template-columns: repeat(3, 1fr); gap: 8px; }
     .tile { min-height: 0; aspect-ratio: 1 / 1; font-size: 12.5px; }
@@ -292,6 +312,12 @@
     <button data-tab="log">Activity Log</button>
     <button data-tab="settings">Settings</button>
   </nav>
+  <div class="tasks" id="taskBar" aria-label="Shipments waiting for each step">
+    <button class="task" type="button" data-task="3"><span class="light">0</span><span class="tl"><b>3 Inventory Confirmed</b><span>Manager 1</span></span></button>
+    <button class="task" type="button" data-task="4a"><span class="light">0</span><span class="tl"><b>4a Listed Online</b><span>Manager 2</span></span></button>
+    <button class="task" type="button" data-task="4b"><span class="light">0</span><span class="tl"><b>4b Renfrew Count</b><span>Renfrew staff</span></span></button>
+    <button class="task" type="button" data-task="5"><span class="light">0</span><span class="tl"><b>5 On Store Shelf</b><span>Renfrew staff</span></span></button>
+  </div>
 </header>
 
 <main>
@@ -415,7 +441,8 @@ const MOVE_REASONS = { PUTAWAY: 'Put away', MOVE: 'Move', ADD: 'Manual add', TO_
 const state = {
   tab: 'list', filter: 'open', shipments: [], detail: null, detailId: '', highlightUpc: '',
   map: null, selectedCell: '', findUpc: '', findCodes: new Set(),
-  config: null  // from ping: which passwords are set, Shopify connection
+  config: null,  // from ping: which passwords are set, Shopify connection
+  stepFilter: '', taskCounts: null  // reminder lights: step shown on the list, counts per step
 };
 
 // ---------------- Helpers ----------------
@@ -468,8 +495,11 @@ async function api(fn, args) {
     if (err.code === 'ACCESS' || err.code === 'NEED_USER') showLogin(err.message);
     throw err;
   }
+  // Steps changed: update the reminder lights
+  if (STEP_CHANGING.has(fn)) setTimeout(refreshTasks, 0);
   return body.result;
 }
+const STEP_CHANGING = new Set(['completeStep', 'undoStep', 'countScan', 'setCounts']);
 
 // When the server asks for confirmation (code=CONFIRM), ask and resend with force
 async function apiConfirm(fn, args) {
@@ -620,6 +650,7 @@ $$('#tabs button').forEach((b) => (b.onclick = () => {
 
 function refreshCurrent() {
   if (!store('trk_user')) { showLogin(''); return; }
+  if (!(state.tab === 'list' && !state.detailId && state.filter === 'open')) refreshTasks();
   if (state.tab === 'list') { if (state.detailId) loadDetail(state.detailId); else loadList(); }
   if (state.tab === 'renfrew') loadMap();
   if (state.tab === 'log') loadLog();
@@ -654,6 +685,13 @@ async function loadList() {
   if (!state.shipments.length) box.innerHTML = '<div class="empty"><span class="spin"></span> Loading…</div>';
   try {
     state.shipments = await api('listShipments', { filter: state.filter });
+    // The open list already has every shipment's next steps: count the lights from it
+    if (state.filter === 'open') {
+      const counts = { '3': 0, '4a': 0, '4b': 0, '5': 0 };
+      for (const s of state.shipments) for (const k of s.nextSteps) if (k in counts) counts[k] += 1;
+      state.taskCounts = counts;
+      renderTasks();
+    }
     renderList();
   } catch (e) {
     box.innerHTML = `<div class="empty err">${esc(e.message)}</div>`;
@@ -661,10 +699,14 @@ async function loadList() {
 }
 function renderList() {
   const q = $('#listFilter').value.trim().toLowerCase();
-  const rows = state.shipments.filter((s) => !q || (s.supplier + ' ' + s.name).toLowerCase().includes(q));
+  const rows = state.shipments.filter((s) => (!q || (s.supplier + ' ' + s.name).toLowerCase().includes(q))
+    && (!state.stepFilter || (!s.done && s.nextSteps.includes(state.stepFilter))));
   const box = $('#shipList');
+  const stepChip = state.stepFilter
+    ? `<div class="row" style="margin-bottom:10px"><button class="step-filter" type="button" id="clearStep">Waiting for step ${esc(state.stepFilter)} ${esc(STEP_LABELS[state.stepFilter])} ✕</button></div>` : '';
   if (!rows.length) {
-    box.innerHTML = `<div class="empty">${state.filter === 'open' ? 'No shipments in progress.' : 'Nothing here.'}</div>`;
+    box.innerHTML = stepChip + `<div class="empty">${state.stepFilter ? 'No shipments waiting for this step.' : state.filter === 'open' ? 'No shipments in progress.' : 'Nothing here.'}</div>`;
+    bindStepChip();
     return;
   }
   const next = (s) => (s.done ? `<span class="tag ok">Completed ${fmtDate(s.steps['5'].at)}</span>` : s.nextSteps.map((k) => stepTag(s, k)).join(' '))
@@ -680,7 +722,7 @@ function renderList() {
       <div class="row"><span class="row" style="gap:4px">${next(s)}</span><span class="grow"></span>
         <span class="small muted nowrap">${s.receivedUnits}/${s.expectedUnits} recv${s.renfrewUnits ? ` · Renfrew ${s.countedUnits}/${s.renfrewUnits}` : ''}</span></div>
     </div>`).join('')}</div>`;
-  box.innerHTML = cards + `<div class="table-wrap hide-sm"><table class="grid ships"><thead><tr>
+  box.innerHTML = stepChip + cards + `<div class="table-wrap hide-sm"><table class="grid ships"><thead><tr>
       <th>Shipment</th><th>Supplier</th><th class="hide-sm">Created</th><th>Progress</th><th>Next Step</th><th class="hide-sm">Inventory</th><th class="num">Received</th><th></th>
     </tr></thead><tbody>${rows.map((s) => `
       <tr class="${s.done ? 'done' : ''}" data-id="${esc(s.shipmentId)}" tabindex="0">
@@ -693,7 +735,52 @@ function renderList() {
         <td class="num nowrap">${s.receivedUnits}/${s.expectedUnits}<div class="alloc-sub">${s.lineCount} items${s.renfrewUnits ? ` · Renfrew ${s.countedUnits}/${s.renfrewUnits}` : ''}</div></td>
         <td><button class="btn small" type="button">Open</button></td>
       </tr>`).join('')}</tbody></table></div>`;
+  bindStepChip();
 }
+function bindStepChip() {
+  const c = $('#clearStep'); if (c) c.onclick = () => showStep('');
+}
+
+// ---------------- Reminder lights ----------------
+// One light per step (3, 4a, 4b, 5): the number of open shipments that can do that step now.
+// Tapping a light lists those shipments; tapping it again shows all.
+function renderTasks() {
+  const counts = (state.taskCounts || {});
+  let total = 0;
+  $$('#taskBar [data-task]').forEach((b) => {
+    const n = Number(counts[b.dataset.task] || 0);
+    total += n;
+    $('.light', b).textContent = n;
+    b.classList.toggle('on', n > 0);
+    b.classList.toggle('sel', state.stepFilter === b.dataset.task);
+    b.title = `${n} shipment(s) waiting for step ${b.dataset.task} ${STEP_LABELS[b.dataset.task]}`;
+  });
+  // Browser tab title shows the total, so a tab in the background still tells people there is work
+  document.title = (total ? `(${total}) ` : '') + 'Receiving Tracker';
+}
+let taskLoading = null;
+async function refreshTasks() {
+  if (!store('trk_user') || taskLoading) return taskLoading;
+  taskLoading = api('taskCounts').then((r) => { state.taskCounts = r.counts; renderTasks(); }).catch(() => {}).finally(() => { taskLoading = null; });
+  return taskLoading;
+}
+function showStep(step) {
+  state.stepFilter = step;
+  renderTasks();
+  if (step && state.filter !== 'open') {
+    state.filter = 'open';
+    $$('#filterChips .chip').forEach((x) => x.classList.toggle('active', x.dataset.filter === 'open'));
+    state.shipments = [];
+  }
+  if (state.tab !== 'list' || state.detailId) {
+    state.detailId = ''; state.detail = null;
+    $('#detailView').classList.add('hidden'); $('#listView').classList.remove('hidden');
+    setTab('list');
+  } else if (!state.shipments.length) loadList();
+  else renderList();
+}
+$$('#taskBar [data-task]').forEach((b) => (b.onclick = () => showStep(state.stepFilter === b.dataset.task ? '' : b.dataset.task)));
+
 $('#shipList').addEventListener('click', (e) => { const r = e.target.closest('[data-id]'); if (r) openDetail(r.dataset.id); });
 $('#shipList').addEventListener('keydown', (e) => { const r = e.target.closest('[data-id]'); if (r && e.key === 'Enter') openDetail(r.dataset.id); });
 $('#listFilter').addEventListener('input', renderList);
@@ -1725,11 +1812,13 @@ if (!idleSignOut()) {
   if (!store('trk_user')) showLogin('');
   else { loadList(); loadConfig(); refreshPutBadge(); }
 }
+renderTasks();
 setInterval(() => {
   if (document.hidden || $('.modal-bg') || $('#cam') || !store('trk_user')) return;
   if (state.tab === 'list' && !state.detailId) loadList();
   else if (state.tab === 'list' && state.detailId) loadDetail(state.detailId);
   if (state.tab === 'renfrew') loadMap(); else refreshPutBadge();
+  if (!(state.tab === 'list' && !state.detailId && state.filter === 'open')) refreshTasks();
 }, 60000);
 </script>
 </body>

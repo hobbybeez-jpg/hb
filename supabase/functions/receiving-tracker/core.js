@@ -853,6 +853,15 @@ const API = {
     return { tracked: true, ignored: false, steps: shipment.steps, nextSteps: shipment.nextSteps, done: shipment.done };
   },
 
+  // Reminder lights: how many open shipments can do each step now (same rule as "Next step" on the list)
+  async taskCounts(tx) {
+    const counts = { '3': 0, '4a': 0, '4b': 0, '5': 0 };
+    for (const s of await API.listShipments(tx, { filter: 'open' })) {
+      for (const k of s.nextSteps) if (k in counts) counts[k] += 1;
+    }
+    return { counts };
+  },
+
   async listShipments(tx, { filter = 'open' }) {
     await syncShipments(tx);
     const wh = await whExists(tx);
