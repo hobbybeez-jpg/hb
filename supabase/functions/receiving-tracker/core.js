@@ -410,6 +410,15 @@ async function takeFromLocation(tx, locationCode, upc, qty, preferredShipmentId 
   return { portions, available };
 }
 
+// Default put-away box: the first active box of the Main Rack ('' if there is none)
+async function defaultBox(tx) {
+  const rows = await tx.query(
+    `select code from trk.renfrew_locations where rack = 'MAIN' and active
+     order by coalesce(substring(code from '-(\\d+)$')::int, 0), code limit 1`
+  );
+  return rows.length ? rows[0].code : '';
+}
+
 async function requireLocation(tx, code) {
   const rows = await tx.query('select * from trk.renfrew_locations where code = $1 and active', [cleanText(code, 20).toUpperCase()]);
   if (!rows.length) throw new UserError('Location not found: ' + code);
@@ -1126,13 +1135,15 @@ const API = {
         totalQty: items.reduce((n, i) => n + i.qty, 0)
       });
     }
-    return { racks, toPutaway: await API.renfrewToPutaway(tx) };
+    return { racks, defaultBox: await defaultBox(tx), toPutaway: await API.renfrewToPutaway(tx) };
   },
 
   // Counted items not put away yet, with the suggested split:
   //   Pending: 1 unit, unless this UPC is already in Pending or this shipment already sent one there
-  //   The rest: the box this UPC is in now (or was last put in), if that box is still active
+  //   The rest: the box this UPC is in now (or was last put in), if that box is still active;
+  //   otherwise the default box (first box of the Main Rack)
   async renfrewToPutaway(tx) {
+    const mainBox = await defaultBox(tx);
     const rows = await tx.query(
       `select c.*,
               (select st.location_code from trk.renfrew_stock st join trk.renfrew_locations l on l.code = st.location_code and l.active
@@ -1159,7 +1170,7 @@ const API = {
         shipmentId: c.shipment_id, shipment: labels[c.shipment_id] || null, lineId: c.line_id,
         upc: c.upc || '', productName: c.product_name || '', remaining,
         suggestPending: pendingQty,
-        suggestLocation: c.current_loc || c.last_loc || ''
+        suggestLocation: c.current_loc || c.last_loc || mainBox
       };
     });
   },
