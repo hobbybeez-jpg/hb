@@ -205,7 +205,8 @@ function shipmentColumns(wh) {
   (s.shipment_id is null) as wh_missing,
   t.s2_at, t.s2_by, t.s3_at, t.s3_by, t.s4a_at, t.s4a_by, t.s4b_at, t.s4b_by, t.s4b_note, t.s5_at, t.s5_by, t.s5_note,
   ${renfrewUnits} as renfrew_units,
-  (select coalesce(sum(c.counted_qty), 0) from trk.renfrew_checks c where c.shipment_id = t.shipment_id) as counted_units`;
+  (select coalesce(sum(c.counted_qty), 0) from trk.renfrew_checks c where c.shipment_id = t.shipment_id) as counted_units,
+  (select coalesce(sum(c.counted_qty - c.put_qty), 0) from trk.renfrew_checks c where c.shipment_id = t.shipment_id) as unput_units`;
 }
 
 // Some inventory shipments have no name; fall back to the part of shipment_id after '|'
@@ -236,6 +237,8 @@ function shipmentOut(row) {
     s5Note: row.s5_note || '',
     renfrewUnits,
     countedUnits: Number(row.counted_units || 0),
+    // Counted in 4b but not put away yet
+    unputUnits: Number(row.unput_units || 0),
     renfrewNA,
     nextSteps: nextSteps(steps, renfrewNA),
     done: !!row.s5_at

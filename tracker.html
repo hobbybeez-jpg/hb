@@ -215,7 +215,7 @@
   @keyframes sp { to { transform: rotate(360deg); } }
 
   /* Action tiles (Renfrew Stock): same size everywhere, square on phones */
-  .action-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 12px; }
+  .action-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 12px; }
   .tile { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 92px;
     padding: 10px 6px; border: 0; border-radius: var(--radius); background: #fff; box-shadow: var(--shadow); color: var(--ink-2);
     font-size: 13px; font-weight: 600; line-height: 1.25; text-align: center; transition: box-shadow .12s, background .12s; }
@@ -329,9 +329,8 @@
   <section id="tab-renfrew" class="hidden">
     <div class="action-grid">
       <button class="tile warn" id="btnPutaway" type="button"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8"/><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M10 12h4"/></svg><span>To Put Away</span><span class="tile-badge" id="putCount"></span></button>
-      <button class="tile" id="btnBatch" type="button"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M8 7v10M12 7v10M16 7v10"/></svg><span>Scan into Box</span></button>
+      <button class="tile" id="btnBatch" type="button"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M8 7v10M12 7v10M16 7v10"/></svg><span>Scan into Box<span class="tile-sub">Existing stock · not from a shipment</span></span></button>
       <button class="tile pending" id="btnScanOut" type="button"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l1.5-5h15L21 9"/><path d="M4 9v11h16V9"/><path d="M9 20v-6h6v6"/><path d="M3 9h18"/></svg><span>Scan Out<span class="tile-sub">Pending → store floor</span></span></button>
-      <button class="tile" id="btnAddStock" type="button"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M12 8v8M8 12h8"/></svg><span>Add Item</span></button>
       <button class="tile" id="btnLocations" type="button"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>Locations</span></button>
       <button class="tile" id="refreshMap" type="button"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/></svg><span>Refresh</span></button>
     </div>
@@ -668,7 +667,8 @@ function renderList() {
     box.innerHTML = `<div class="empty">${state.filter === 'open' ? 'No shipments in progress.' : 'Nothing here.'}</div>`;
     return;
   }
-  const next = (s) => s.done ? `<span class="tag ok">Completed ${fmtDate(s.steps['5'].at)}</span>` : s.nextSteps.map((k) => stepTag(s, k)).join(' ');
+  const next = (s) => (s.done ? `<span class="tag ok">Completed ${fmtDate(s.steps['5'].at)}</span>` : s.nextSteps.map((k) => stepTag(s, k)).join(' '))
+    + (s.unputUnits > 0 ? ` <span class="tag warn">📦 To put away ${s.unputUnits}</span>` : '');
   // Phones: one card per shipment; larger screens: the table
   const cards = `<div class="ship-cards show-sm">${rows.map((s) => `
     <div class="ship-card ${s.done ? 'done' : ''}" data-id="${esc(s.shipmentId)}" tabindex="0">
@@ -746,6 +746,8 @@ function stepCard(s, k) {
   }
   const undo = done && k !== '1' && canUndo(s, k) ? ` · <button class="link" type="button" data-undo="${k}">Undo</button>` : '';
   const prog = k === '4b' && s.renfrewUnits ? `<div class="count-prog">${s.countedUnits}/${s.renfrewUnits} pcs counted</div>` : '';
+  // Counted but not put away yet (put away can start before 4b is complete)
+  if (k === '4b' && s.unputUnits > 0) action += `<button class="btn warn small" type="button" data-putaway>To put away ${s.unputUnits}</button>`;
   return `<div class="step ${done ? 'done' : na ? 'na' : now ? 'now' : ''}">
     <div class="t"><span class="n">${k}</span>${STEP_LABELS[k]}</div>
     <div class="who">${done ? `${esc(done.by || STEP_WHO[k])} · ${fmtTime(done.at)}${undo}` : na ? 'Not needed — no Renfrew items' : STEP_WHO[k]}</div>
@@ -864,6 +866,7 @@ function renderDetail() {
   $('#backBtn').onclick = closeDetail;
   $('#reloadDetail').onclick = () => loadDetail(s.shipmentId);
   const gp = $('#goPutaway'); if (gp) gp.onclick = () => openPutaway(s.shipmentId);
+  $$('#detailView [data-putaway]').forEach((b) => (b.onclick = () => openPutaway(s.shipmentId)));
   const gc = $('#goCount'); if (gc) gc.onclick = () => openCount();
   const lf = $('#lineFilter');
   const applyFilter = () => {
@@ -1001,7 +1004,7 @@ function openCount() {
   body.className = 'list';
   const m = modal({ title: `4b Renfrew Count · ${s0.supplier} ${s0.name}`, body,
     foot: '<button class="btn" type="button" data-a="close">Close (saved)</button><button class="btn primary" type="button" data-a="ok">Complete 4b</button>',
-    onClose: () => { if (state.detailId === id) loadDetail(id); } });
+    onClose: () => { if (state.detailId === id) loadDetail(id); refreshPutBadge(); } });
   let queue = Promise.resolve();
   let finished = false;
   const after = (r, flashLine) => {
@@ -1174,6 +1177,8 @@ async function loadMap() {
     renderMap();
   } catch (e) { $('#racks').innerHTML = `<div class="empty err">${esc(e.message)}</div>`; }
 }
+// Badge on the Renfrew Stock tab: units counted in 4b and not put away yet (all shipments)
+function refreshPutBadge() { return api('renfrewMap').then((m) => { state.map = m; renderPutBadge(); }).catch(() => {}); }
 function renderPutBadge() {
   const n = state.map ? state.map.toPutaway.reduce((t, x) => t + x.remaining, 0) : 0;
   $('#putBadge').textContent = n; $('#putBadge').classList.toggle('hidden', !n);
@@ -1284,7 +1289,7 @@ async function openPutaway(onlyShipmentId) {
     form.onsubmit = (e) => { e.preventDefault(); const v = input.value.trim(); input.value = ''; if (v) find(v); };
     $('.scan-btn', form).onclick = () => openScanner(find);
     const all = $('#putAll', body); if (all) all.onclick = () => { filterShip = ''; render(); };
-    $('#putBatch', body).onclick = () => { const only = filterShip; m.close(); openBatchPutaway(only); };
+    $('#putBatch', body).onclick = () => { const only = filterShip; m.close(); openBatchScan('shipment', only); };
     // One row -> up to two put-aways: the Pending part and the box part
     const rowItems = (it, sid) => {
       const pq = Math.max(0, parseInt($('[data-pq]', it).value, 10) || 0);
@@ -1332,9 +1337,9 @@ async function openPutaway(onlyShipmentId) {
 $('#btnPutaway').onclick = () => openPutaway('');
 
 // Batch scan into one box (1 scan = 1 pc); nothing is saved until "Put away" / "Add".
-//   From shipment: counted items on the put-away list (can mix shipments); the server checks every quantity again.
-//   From stock: items not from any shipment (e.g. stock-count corrections); names come from lookupUpc.
-async function openBatchPutaway(onlyShipmentId, startMode) {
+//   'shipment' (from To Put Away): counted items on the put-away list (can mix shipments); the server checks every quantity again.
+//   'stock' (Scan into Box tile): existing stock not from any shipment (e.g. stock-count corrections); names come from lookupUpc.
+async function openBatchScan(mode, onlyShipmentId) {
   try { state.map = await api('renfrewMap'); } catch (e) { toast(e.message, 'bad'); return; }
   const key = (u) => String(u || '').replace(/^0+/, '');
   const rowsFor = (k) => state.map.toPutaway.filter((x) => key(x.upc) === k && (!onlyShipmentId || x.shipmentId === onlyShipmentId));
@@ -1345,7 +1350,6 @@ async function openBatchPutaway(onlyShipmentId, startMode) {
     const p = state.map.toPutaway.find((x) => key(x.upc) === k && x.productName);
     return p ? p.productName : '';
   };
-  let mode = onlyShipmentId ? 'shipment' : (startMode === 'stock' ? 'stock' : 'shipment');
   const stock = () => mode === 'stock';
   // UPC without leading zeros -> { upc, productName, qty, looking, needName, hint }; latest scan last
   const scanned = new Map();
@@ -1355,27 +1359,23 @@ async function openBatchPutaway(onlyShipmentId, startMode) {
   body.className = 'list';
   const start = state.selectedCell && state.map.racks.some((r) => r.cells.some((c) => c.code === state.selectedCell)) ? state.selectedCell : '';
   body.innerHTML = `
-    ${onlyShipmentId ? '' : `<div class="chips" id="bxMode" style="display:flex">
-      <button class="chip" type="button" data-mode="shipment" style="flex:1">From shipment</button>
-      <button class="chip" type="button" data-mode="stock" style="flex:1">From stock</button></div>`}
-    <div class="small muted" id="bxHelp"></div>
+    ${stock()
+      ? `<div class="note-box"><b>Existing stock only</b>: items already at Renfrew that are not from any shipment (e.g. stock-count corrections).
+          For shipment items, use <b>To Put Away</b> instead.</div>
+        <div class="small muted">Scan each item (1 scan = 1 pc). Nothing is saved until you press Add.</div>`
+      : `<div class="small muted">Counted shipment items. Scan each item (1 scan = 1 pc). Nothing is saved until you press Put away.
+          ${onlyShipmentId ? '<br>Only items from this shipment.' : ''}</div>`}
     <label class="f">Box<select class="inp" id="bxLoc">${locationOptions(start, { placeholder: 'Choose box…' })}</select></label>
     <form class="scanbox" id="bxScan"><input class="inp" inputmode="numeric" autocomplete="off" placeholder="Scan UPC" />
       <button class="btn scan-btn" type="button">📷</button></form>
     <div class="row small"><b id="bxTotal"></b></div>
     <div class="list" id="bxList"></div>`;
-  const m = modal({ title: 'Scan into Box', body,
+  const m = modal({ title: stock() ? 'Scan into Box · Existing Stock' : 'Scan into One Box · Shipment Items', body,
     foot: '<button class="btn" type="button" data-a="cancel">Cancel</button><button class="btn primary" type="button" data-a="ok" disabled>Put away</button>',
     beforeClose: () => saved || !total() || confirm(`Discard ${total()} scanned pc(s)? Nothing has been saved yet.`),
     onClose: () => { if (state.tab === 'renfrew') loadMap(); if (state.detailId) loadDetail(state.detailId); } });
   const input = $('#bxScan input', body);
   const okBtn = $('[data-a=ok]', m.foot);
-  const renderMode = () => {
-    $$('#bxMode .chip', body).forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
-    $('#bxHelp', body).innerHTML = stock()
-      ? 'Items not from any shipment (e.g. stock-count corrections). Scan each item (1 scan = 1 pc). Nothing is saved until you press Add.'
-      : `Counted items from shipments. Scan each item (1 scan = 1 pc). Nothing is saved until you press Put away.${onlyShipmentId ? '<br>Only items from this shipment.' : ''}`;
-  };
   const renderList = (flashKey) => {
     const n = total();
     const verb = stock() ? 'Add' : 'Put away';
@@ -1409,7 +1409,7 @@ async function openBatchPutaway(onlyShipmentId, startMode) {
       if (nm) nm.oninput = () => { scanned.get(k).productName = nm.value; };
     });
   };
-  // From stock: inventory system, tracker records, then Shopify; the name can be typed when nothing is found
+  // Existing stock: inventory system, tracker records, then Shopify; the name can be typed when nothing is found
   const lookup = async (k, x) => {
     try {
       const r = await api('lookupUpc', { upc: x.upc });
@@ -1428,7 +1428,7 @@ async function openBatchPutaway(onlyShipmentId, startMode) {
       if (!x) {
         x = { upc: code, productName: knownName(k), qty: 0 };
         if (!x.productName) { x.looking = true; lookup(k, x); }
-        if (rowsFor(k).length) x.hint = 'Also on the put-away list (use From shipment for shipment items).';
+        if (rowsFor(k).length) x.hint = 'Also on the put-away list: if it came in a shipment, use To Put Away instead.';
       }
       x.qty += 1;
       scanned.delete(k); scanned.set(k, x);  // newest scan shows first
@@ -1439,7 +1439,7 @@ async function openBatchPutaway(onlyShipmentId, startMode) {
     const rows = rowsFor(k);
     if (!rows.length) {
       beep(false);
-      toast(`Not on the put-away list${onlyShipmentId ? ' for this shipment' : ''}: ${code}${onlyShipmentId ? '' : ' (use From stock for items not from a shipment)'}`, 'bad');
+      toast(`Not on the put-away list${onlyShipmentId ? ' for this shipment' : ''}: ${code}. Existing stock not from a shipment: use Scan into Box on the Renfrew Stock page.`, 'bad');
       return;
     }
     const x = scanned.get(k) || { upc: rows[0].upc, productName: rows[0].productName, qty: 0 };
@@ -1449,14 +1449,6 @@ async function openBatchPutaway(onlyShipmentId, startMode) {
     beep(true);
     renderList(k);
   };
-  $$('#bxMode .chip', body).forEach((b) => (b.onclick = () => {
-    if (b.dataset.mode === mode) return;
-    if (total() && !confirm(`Discard ${total()} scanned pc(s) and switch to "${b.textContent}"? Nothing has been saved yet.`)) return;
-    mode = b.dataset.mode;
-    scanned.clear();
-    renderMode(); renderList();
-    input.focus();
-  }));
   $('#bxScan', body).onsubmit = (e) => { e.preventDefault(); const v = input.value.trim(); input.value = ''; if (v) scan(v); };
   $('.scan-btn', body).onclick = () => openScanner(scan, { continuous: true });
   $('[data-a=cancel]', m.foot).onclick = m.close;
@@ -1497,12 +1489,11 @@ async function openBatchPutaway(onlyShipmentId, startMode) {
       renderList();
     }
   };
-  renderMode();
   renderList();
   setTimeout(() => (start ? input : $('#bxLoc', body)).focus(), 30);
   $('#bxLoc', body).onchange = () => input.focus();
 }
-$('#btnBatch').onclick = () => openBatchPutaway('');
+$('#btnBatch').onclick = () => openBatchScan('stock');
 
 // Scan out of Pending (any shipment)
 $('#btnScanOut').onclick = () => {
@@ -1532,8 +1523,6 @@ $('#btnScanOut').onclick = () => {
   setTimeout(() => input.focus(), 30);
 };
 
-// Add item manually: the same batch scan, From stock
-$('#btnAddStock').onclick = () => openBatchPutaway('', 'stock');
 
 // Manage locations
 $('#btnLocations').onclick = async () => {
@@ -1732,13 +1721,13 @@ if (!(window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 900
 renderUser();
 if (!idleSignOut()) {
   if (!store('trk_user')) showLogin('');
-  else { loadList(); loadConfig(); api('renfrewMap').then((m) => { state.map = m; renderPutBadge(); }).catch(() => {}); }
+  else { loadList(); loadConfig(); refreshPutBadge(); }
 }
 setInterval(() => {
   if (document.hidden || $('.modal-bg') || $('#cam') || !store('trk_user')) return;
   if (state.tab === 'list' && !state.detailId) loadList();
   else if (state.tab === 'list' && state.detailId) loadDetail(state.detailId);
-  else if (state.tab === 'renfrew') loadMap();
+  if (state.tab === 'renfrew') loadMap(); else refreshPutBadge();
 }, 60000);
 </script>
 </body>
