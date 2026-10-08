@@ -667,7 +667,8 @@ function renderList() {
     box.innerHTML = `<div class="empty">${state.filter === 'open' ? 'No shipments in progress.' : 'Nothing here.'}</div>`;
     return;
   }
-  const next = (s) => s.done ? `<span class="tag ok">Completed ${fmtDate(s.steps['5'].at)}</span>` : s.nextSteps.map((k) => stepTag(s, k)).join(' ');
+  const next = (s) => (s.done ? `<span class="tag ok">Completed ${fmtDate(s.steps['5'].at)}</span>` : s.nextSteps.map((k) => stepTag(s, k)).join(' '))
+    + (s.unputUnits > 0 ? ` <span class="tag warn">📦 To put away ${s.unputUnits}</span>` : '');
   // Phones: one card per shipment; larger screens: the table
   const cards = `<div class="ship-cards show-sm">${rows.map((s) => `
     <div class="ship-card ${s.done ? 'done' : ''}" data-id="${esc(s.shipmentId)}" tabindex="0">
@@ -745,6 +746,8 @@ function stepCard(s, k) {
   }
   const undo = done && k !== '1' && canUndo(s, k) ? ` · <button class="link" type="button" data-undo="${k}">Undo</button>` : '';
   const prog = k === '4b' && s.renfrewUnits ? `<div class="count-prog">${s.countedUnits}/${s.renfrewUnits} pcs counted</div>` : '';
+  // Counted but not put away yet (put away can start before 4b is complete)
+  if (k === '4b' && s.unputUnits > 0) action += `<button class="btn warn small" type="button" data-putaway>To put away ${s.unputUnits}</button>`;
   return `<div class="step ${done ? 'done' : na ? 'na' : now ? 'now' : ''}">
     <div class="t"><span class="n">${k}</span>${STEP_LABELS[k]}</div>
     <div class="who">${done ? `${esc(done.by || STEP_WHO[k])} · ${fmtTime(done.at)}${undo}` : na ? 'Not needed — no Renfrew items' : STEP_WHO[k]}</div>
@@ -863,6 +866,7 @@ function renderDetail() {
   $('#backBtn').onclick = closeDetail;
   $('#reloadDetail').onclick = () => loadDetail(s.shipmentId);
   const gp = $('#goPutaway'); if (gp) gp.onclick = () => openPutaway(s.shipmentId);
+  $$('#detailView [data-putaway]').forEach((b) => (b.onclick = () => openPutaway(s.shipmentId)));
   const gc = $('#goCount'); if (gc) gc.onclick = () => openCount();
   const lf = $('#lineFilter');
   const applyFilter = () => {
@@ -1000,7 +1004,7 @@ function openCount() {
   body.className = 'list';
   const m = modal({ title: `4b Renfrew Count · ${s0.supplier} ${s0.name}`, body,
     foot: '<button class="btn" type="button" data-a="close">Close (saved)</button><button class="btn primary" type="button" data-a="ok">Complete 4b</button>',
-    onClose: () => { if (state.detailId === id) loadDetail(id); } });
+    onClose: () => { if (state.detailId === id) loadDetail(id); refreshPutBadge(); } });
   let queue = Promise.resolve();
   let finished = false;
   const after = (r, flashLine) => {
@@ -1173,6 +1177,8 @@ async function loadMap() {
     renderMap();
   } catch (e) { $('#racks').innerHTML = `<div class="empty err">${esc(e.message)}</div>`; }
 }
+// Badge on the Renfrew Stock tab: units counted in 4b and not put away yet (all shipments)
+function refreshPutBadge() { return api('renfrewMap').then((m) => { state.map = m; renderPutBadge(); }).catch(() => {}); }
 function renderPutBadge() {
   const n = state.map ? state.map.toPutaway.reduce((t, x) => t + x.remaining, 0) : 0;
   $('#putBadge').textContent = n; $('#putBadge').classList.toggle('hidden', !n);
@@ -1715,13 +1721,13 @@ if (!(window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 900
 renderUser();
 if (!idleSignOut()) {
   if (!store('trk_user')) showLogin('');
-  else { loadList(); loadConfig(); api('renfrewMap').then((m) => { state.map = m; renderPutBadge(); }).catch(() => {}); }
+  else { loadList(); loadConfig(); refreshPutBadge(); }
 }
 setInterval(() => {
   if (document.hidden || $('.modal-bg') || $('#cam') || !store('trk_user')) return;
   if (state.tab === 'list' && !state.detailId) loadList();
   else if (state.tab === 'list' && state.detailId) loadDetail(state.detailId);
-  else if (state.tab === 'renfrew') loadMap();
+  if (state.tab === 'renfrew') loadMap(); else refreshPutBadge();
 }, 60000);
 </script>
 </body>
