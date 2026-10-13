@@ -1263,6 +1263,9 @@ async function runSearch(upc) {
 function allCells() { return state.map ? state.map.racks.flatMap((r) => r.cells) : []; }
 // Default put-away box (first box of the Main Rack), reported by the server
 function defaultBox() { return (state.map && state.map.defaultBox) || ''; }
+// Put-away rows start with no box so staff must choose one; the server's Main Rack fallback is only kept when this UPC is already in that box
+function inBox(code, upc) { return allCells().some((c) => c.code === code && (c.items || []).some((i) => upcEq(i.upc, upc))); }
+function suggestedBox(x) { return x.suggestLocation && (x.suggestLocation !== defaultBox() || inBox(x.suggestLocation, x.upc)) ? x.suggestLocation : ''; }
 function locationOptions(selected, { noPending = false, placeholder = '' } = {}) {
   return (placeholder ? `<option value="">${esc(placeholder)}</option>` : '') +
     (state.map ? state.map.racks : []).filter((r) => !noPending || r.rack !== 'PENDING').flatMap((r) => r.cells.map((c) =>
@@ -1375,7 +1378,7 @@ async function openPutaway(onlyShipmentId) {
             <div class="split">
               <label><span class="tag pending">Pending</span><input class="inp qty" type="number" min="0" max="${x.remaining}" value="${x.suggestPending}" data-pq /></label>
               <label>Box<input class="inp qty" type="number" min="0" max="${x.remaining}" value="${x.remaining - x.suggestPending}" data-bq /></label>
-              <select class="inp" style="width:auto" data-loc>${locationOptions(x.suggestLocation, { noPending: true, placeholder: 'Choose box…' })}</select>
+              <select class="inp" style="width:auto" data-loc>${locationOptions(suggestedBox(x), { noPending: true, placeholder: 'Choose box…' })}</select>
               <button class="btn small primary" type="button" data-put>Put away</button>
             </div></div>`).join('')}</div>
         </div>`).join('') || '<div class="empty">✅ Nothing left to put away.</div>'}`;
@@ -1457,7 +1460,8 @@ async function openBatchScan(mode, onlyShipmentId) {
   let saved = false;
   const body = document.createElement('div');
   body.className = 'list';
-  const start = state.selectedCell && state.map.racks.some((r) => r.cells.some((c) => c.code === state.selectedCell)) ? state.selectedCell : defaultBox();
+  // Shipment items (step 4b put-away) start with no box so staff must choose one; existing stock starts in the Main Rack
+  const start = state.selectedCell && state.map.racks.some((r) => r.cells.some((c) => c.code === state.selectedCell)) ? state.selectedCell : (stock() ? defaultBox() : '');
   body.innerHTML = `
     ${stock()
       ? `<div class="note-box"><b>Existing stock only</b>: items already at Renfrew that are not from any shipment (e.g. stock-count corrections).
