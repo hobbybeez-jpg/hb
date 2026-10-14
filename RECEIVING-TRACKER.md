@@ -169,6 +169,8 @@ on conflict (key) do update set value = excluded.value, updated_at = now();
 - **分批到貨、分次收貨（4a 完成後）**：商品陸續到 Renfrew 時，4b 還沒完成也可以先收貨。
   步驟 5 卡片和「Shopify Transfer」區會出現 **Receive counted in Shopify (X pcs)**，X＝已點但還沒收貨的數量；
   按下並確認後（不需要主管密碼）只收這個差額，調貨單顯示「received N/M so far」（部分收貨），其餘仍在運送中。之後再點到貨可以再按一次。
+  - **順序：先收貨，再上架**，Shopify 收了貨，店面才能賣。步驟 5 卡片按鈕依序是「① Receive counted in Shopify」「② Shelve Arrived Items」；
+    上架視窗還有沒收貨的數量時，最上面會提醒「First: receive in Shopify」並附收貨按鈕（只提醒，不強制，Shopify 出問題時仍可上架）。
   - 收過的數量**不能再往下改**：4b 的清點數量不能低於已在 Shopify 收貨的數量（合併點貨的重新分配也一樣）；真的點錯要到 Shopify 手動調整庫存。
   - 收過任何數量後，**不能撤銷 4a，也不能 Unlink 調貨單**。
 - **4b 完成後**：按鈕變成 **Confirm transfer received**，收最後一次，調貨單標為已收貨，收貨數量合計＝**4b 實際點到的數量**（最多到調貨數量）。

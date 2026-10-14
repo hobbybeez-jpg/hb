@@ -834,9 +834,11 @@ function stepCard(s, k) {
     action = '<div class="small muted">Waiting for "Qty Confirmed" in the inventory system (Receiving page)</div>';
   } else if (now) {
     const labels = { '3': '🔒 Manager 1: Confirm Inventory', '4a': '🔒 Manager 2: Mark Listed', '4b': s.countedUnits ? 'Continue Count' : 'Start Count', '5': partial ? 'Shelve Arrived Items' : 'Scan to Store Shelf' };
-    if (partial) action = `<div class="small muted">4b still open: shelve what has arrived (${s.pendingUnits} in Pending). Complete step 5 after 4b.</div>`;
-    action += `<button class="btn ${k === '5' ? 'ok' : 'primary'} small" type="button" data-step="${k}">${labels[k]}</button>`;
-    if (k === '5' && canReceive(state.detail)) action += receiveButton(state.detail);
+    // Receive in Shopify before shelving, so the store can sell what goes onto the floor
+    const receive = k === '5' && canReceive(state.detail);
+    if (partial) action = `<div class="small muted">4b still open: ${receive ? '① receive what was counted in Shopify, then ② shelve' : 'shelve'} what has arrived (${s.pendingUnits} in Pending). Complete step 5 after 4b.</div>`;
+    if (receive) action += receiveButton(state.detail, '① ');
+    action += `<button class="btn ${k === '5' ? 'ok' : 'primary'} small" type="button" data-step="${k}">${receive ? '② ' : ''}${labels[k]}</button>`;
   }
   const undo = done && k !== '1' && canUndo(s, k) ? ` · <button class="link" type="button" data-undo="${k}">Undo</button>` : '';
   const prog = k === '4b' && s.renfrewUnits ? `<div class="count-prog">${s.countedUnits}/${s.renfrewUnits} pcs counted</div>` : '';
@@ -1044,9 +1046,9 @@ function canReceive(d) {
   const open = ['CREATED', 'PARTIAL', 'RECEIVE_ERROR', 'RECEIVING'].includes(t.status) || (t.status === 'RECEIVED' && !s.steps['4b']);
   return open && (!!s.steps['4b'] || t.receivable > 0);
 }
-function receiveButton(d) {
+function receiveButton(d, prefix = '') {
   const label = d.shipment.steps['4b'] ? 'Confirm transfer received' : `Receive counted in Shopify (${d.shopifyTransfer.receivable} pcs)`;
-  return ` <button class="btn primary small" type="button" data-shopify="receive">${label}</button>`;
+  return ` <button class="btn primary small" type="button" data-shopify="receive">${prefix}${label}</button>`;
 }
 function shopifySection(d) {
   const s = d.shipment; const t = d.shopifyTransfer;
@@ -1325,7 +1327,9 @@ function openStep5() {
     const unput = d.checks.filter((c) => c.countedQty > c.putQty);
     const t = d.shopifyTransfer;
     body.innerHTML = `
-      ${t ? `<div class="row small">${transferTag(t)}<span class="grow"></span>${canReceive(d) ? receiveButton(d) : ''}</div>` : ''}
+      ${canReceive(d) ? `<div class="note-box"><b>First: receive in Shopify.</b> ${d.shipment.steps['4b'] ? 'The transfer is not confirmed received yet' : `${t.receivable} counted unit(s) are not received yet`}, so the store cannot sell them in Shopify. Receive before shelving.
+        <div class="row small" style="margin-top:6px">${transferTag(t)}${receiveButton(d)}</div></div>`
+        : t ? `<div class="row small">${transferTag(t)}</div>` : ''}
       ${d.shipment.steps['4b'] ? '' : `<div class="note-box">4b is still open (${d.shipment.countedUnits}/${d.shipment.renfrewUnits} pcs counted): shelve the items that have arrived. Step 5 can be completed after 4b.</div>`}
       <div class="small muted">Scan items from Pending: each scan = one unit onto the store floor.</div>
       <form class="scanbox" id="s5Scan"><input class="inp" inputmode="numeric" autocomplete="off" placeholder="Scan UPC" />
