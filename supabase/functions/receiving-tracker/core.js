@@ -206,7 +206,8 @@ function shipmentColumns(wh) {
   t.s2_at, t.s2_by, t.s3_at, t.s3_by, t.s4a_at, t.s4a_by, t.s4b_at, t.s4b_by, t.s4b_note, t.s5_at, t.s5_by, t.s5_note,
   ${renfrewUnits} as renfrew_units,
   (select coalesce(sum(c.counted_qty), 0) from trk.renfrew_checks c where c.shipment_id = t.shipment_id) as counted_units,
-  (select coalesce(sum(c.counted_qty - c.put_qty), 0) from trk.renfrew_checks c where c.shipment_id = t.shipment_id) as unput_units`;
+  (select coalesce(sum(c.counted_qty - c.put_qty), 0) from trk.renfrew_checks c where c.shipment_id = t.shipment_id) as unput_units,
+  (select coalesce(sum(st.qty), 0) from trk.renfrew_stock st where st.shipment_id = t.shipment_id and st.location_code = 'PENDING') as pending_units`;
 }
 
 // Some inventory shipments have no name; fall back to the part of shipment_id after '|'
@@ -225,6 +226,10 @@ function shipmentOut(row) {
   const renfrewUnits = Number(row.renfrew_units || 0);
   // Nothing goes to Renfrew: 4b and 5 are not needed
   const renfrewNA = renfrewUnits === 0 && !row.s4b_at;
+  const pendingUnits = Number(row.pending_units || 0);
+  // Items arrive at Renfrew at different times: after 4a, what has been counted can go onto the store
+  // floor before 4b is complete (step 5 itself is completed after 4b)
+  const partialShelf = !!steps['4a'] && !steps['4b'] && !steps['5'] && !renfrewNA;
   return {
     shipmentId: row.shipment_id,
     supplier: row.supplier || '',
@@ -239,7 +244,11 @@ function shipmentOut(row) {
     countedUnits: Number(row.counted_units || 0),
     // Counted in 4b but not put away yet
     unputUnits: Number(row.unput_units || 0),
+    // This shipment's units in Pending (waiting to go onto the store floor)
+    pendingUnits,
     renfrewNA,
+    partialShelf,
+    shelveNow: partialShelf && pendingUnits > 0,
     nextSteps: nextSteps(steps, renfrewNA),
     done: !!row.s5_at
   };
@@ -571,7 +580,8 @@ async function autoCompleteCount(tx, id, user) {
 //   PENDING / CREATING / ERROR   being created / failed (retry with the Manager 2 password)
 //   CREATED                      in transit in Shopify
 //   RECEIVING / RECEIVE_ERROR    being received / failed (retry)
-//   RECEIVED                     received in Shopify
+//   PARTIAL                      part received while 4b is still open (items arrive at different times)
+//   RECEIVED                     received in Shopify (the last receive after 4b is complete)
 //   UNLINKED                     detached by an admin; a new transfer can be created
 // Every Shopify call runs outside the database transaction: the row is claimed first (status + attempt_at),
 // so two people pressing at the same time cannot create two transfers. Retries are safe because the
@@ -598,6 +608,41 @@ function transferOut(row) {
 function transferLines(row) {
   const lines = typeof row.lines === 'string' ? JSON.parse(row.lines) : row.lines;
   return Array.isArray(lines) ? lines : [];
+}
+
+// Units counted toward the transfer (up to what was sent) that are not received in Shopify yet
+function receivableQty(row, checks) {
+  if (!row) return 0;
+  const counted = {};
+  for (const c of checks) counted[normUpc(c.upc)] = (counted[normUpc(c.upc)] || 0) + Number(c.counted_qty);
+  return transferLines(row).reduce((n, l) => {
+    const target = Math.min(l.qty, l.upcs.reduce((sum, upc) => sum + (counted[normUpc(upc)] || 0), 0));
+    return n + Math.max(0, target - Number(l.received || 0));
+  }, 0);
+}
+
+// Units already received in Shopify, per transfer line: the 4b count of those UPCs cannot go below it
+async function receivedFloors(tx, shipmentId) {
+  const row = await loadTransferRow(tx, shipmentId, false);
+  if (!row || row.status === 'UNLINKED') return [];
+  return transferLines(row).filter((l) => Number(l.received) > 0)
+    .map((l) => ({ upcs: l.upcs.map(normUpc), received: Number(l.received), name: l.productName || l.upcs[0] }));
+}
+
+async function assertReceivedFloor(tx, shipmentId) {
+  const floors = await receivedFloors(tx, shipmentId);
+  if (!floors.length) return;
+  const checks = await loadChecks(tx, shipmentId);
+  for (const f of floors) {
+    const counted = checks.filter((c) => f.upcs.includes(normUpc(c.upc))).reduce((n, c) => n + Number(c.counted_qty), 0);
+    if (counted < f.received) {
+      throw new UserError(`${f.name}: ${f.received} already received in Shopify, so the count cannot be lower than that.`);
+    }
+  }
+}
+
+function anyReceived(row) {
+  return !!row && row.status !== 'UNLINKED' && (row.status === 'RECEIVED' || row.status === 'PARTIAL' || Number(row.received_qty) > 0);
 }
 
 function claimFresh(row) {
@@ -796,16 +841,19 @@ const SHOPIFY_ACTIONS = {
       shopify = requireShopify(ctx);
       await tx.query('select 1 from trk.shipments where shipment_id = $1 for update', [id]);
       const shipment = shipmentOut(await loadShipmentRow(tx, id));
-      if (!shipment.steps['4a'] || !shipment.steps['4b']) throw new UserError('Steps 4a and 4b must be done before the transfer can be received.');
+      if (!shipment.steps['4a']) throw new UserError('Step 4a must be done before the transfer can be received.');
       const row = await loadTransferRow(tx, id, true);
       if (!row || row.status === 'UNLINKED' || !row.shipment_gid) throw new UserError('This shipment has no Shopify transfer in transit.');
-      if (row.status === 'RECEIVED') throw new UserError(`Shopify transfer ${row.transfer_name} was already received by ${row.received_by}.`);
+      // Before 4b is complete only what was counted so far is received; the last receive comes after 4b
+      const final = !!shipment.steps['4b'];
+      if (row.status === 'RECEIVED' && final) throw new UserError(`Shopify transfer ${row.transfer_name} was already received by ${row.received_by}.`);
       if (row.status === 'RECEIVING' && claimFresh(row)) throw new UserError('This transfer is being received. Refresh in a few minutes.');
       const checks = await loadChecks(tx, id);
+      if (!final && !receivableQty(row, checks)) throw new UserError('Nothing new to receive: every unit counted so far is already received in Shopify.');
       await tx.query("update trk.shopify_transfers set status = 'RECEIVING', attempt_at = now(), error = null, updated_at = now() where shipment_id = $1", [id]);
-      return { row, checks, user };
+      return { row, checks, user, final };
     });
-    const { row, checks, user } = claim;
+    const { row, checks, user, final } = claim;
     try {
       // Receive what was counted in 4b, up to what was sent; a shortage stays unreceived in Shopify
       const counted = {};
@@ -830,14 +878,26 @@ const SHOPIFY_ACTIONS = {
         // The key follows the exact request, so a retry of the same request is not applied twice
         await shopify.receive({ shipmentId: row.shipment_gid, items, key: await stableKey('receive', id, row.generation, JSON.stringify(items)) });
       }
+      // Remember what each line has received: the 4b count cannot go below it
+      const acceptedByItem = {};
+      for (const l of remote.lines) acceptedByItem[l.inventoryItemId] = (acceptedByItem[l.inventoryItemId] || 0) + l.accepted;
+      for (const it of items) {
+        const l = remote.lines.find((x) => x.id === it.shipmentLineItemId);
+        acceptedByItem[l.inventoryItemId] += it.qty;
+      }
+      const lines = transferLines(row).map((l) => Object.assign({}, l, { received: acceptedByItem[l.inventoryItemId] || 0 }));
       const short = shipped - accepted;
-      const note = `Shopify transfer ${row.transfer_name} received at Renfrew: ${accepted}/${shipped} pcs` +
-        (short > 0 ? `; ${short} pcs not received (still open in Shopify)` : '');
+      const status = final || short <= 0 ? 'RECEIVED' : 'PARTIAL';
+      const note = status === 'PARTIAL'
+        ? `Shopify transfer ${row.transfer_name}: ${accepted}/${shipped} pcs received at Renfrew so far (4b still open)`
+        : `Shopify transfer ${row.transfer_name} received at Renfrew: ${accepted}/${shipped} pcs` +
+          (short > 0 ? `; ${short} pcs not received (still open in Shopify)` : '');
       await db.transaction(async (tx) => {
         await tx.query(
-          `update trk.shopify_transfers set status = 'RECEIVED', received_qty = $2::int, received_by = $3, received_at = now(), error = null, updated_at = now()
+          `update trk.shopify_transfers set status = $4, received_qty = $2::int, received_by = $3, received_at = now(), error = null,
+             lines = $5::text::jsonb, updated_at = now()
            where shipment_id = $1`,
-          [id, accepted, user]
+          [id, accepted, user, status, JSON.stringify(lines)]
         );
         await logEvent(tx, id, '5', 'SHOPIFY', user, note);
       });
@@ -876,7 +936,7 @@ const SHOPIFY_ACTIONS = {
       const user = requireUser(ctx);
       const row = await loadTransferRow(tx, id, true);
       if (!row || row.status === 'UNLINKED') throw new UserError('This shipment has no Shopify transfer.');
-      if (row.status === 'RECEIVED') throw new UserError('This transfer was already received in Shopify and cannot be unlinked.');
+      if (anyReceived(row)) throw new UserError('This transfer was already (partly) received in Shopify and cannot be unlinked.');
       if ((row.status === 'CREATING' || row.status === 'RECEIVING') && claimFresh(row)) throw new UserError('Shopify is busy with this transfer. Try again in a few minutes.');
       await verifyPassword(tx, ctx, await adminKeys(tx), adminPassword, 'manager');
       await tx.query("update trk.shopify_transfers set status = 'UNLINKED', updated_at = now() where shipment_id = $1", [id]);
@@ -913,6 +973,7 @@ const API = {
     const counts = { '3': 0, '4a': 0, '4b': 0, '5': 0 };
     for (const s of await API.listShipments(tx, { filter: 'open' })) {
       for (const k of s.nextSteps) if (k in counts) counts[k] += 1;
+      if (s.shelveNow && !s.nextSteps.includes('5')) counts['5'] += 1;
     }
     return { counts };
   },
@@ -958,7 +1019,10 @@ const API = {
        where st.shipment_id = $1 order by loc.sort, st.location_code, st.product_name`, [id]
     );
     const labels = await shipmentLabels(tx, [id]);
-    const transfer = transferOut(await loadTransferRow(tx, id, false));
+    const transferRow = await loadTransferRow(tx, id, false);
+    const transfer = transferOut(transferRow);
+    // Counted units not received in Shopify yet (the Receive button)
+    if (transfer) transfer.receivable = receivableQty(transferRow, checks);
     const lineById = {};
     for (const l of lines) lineById[l.lineId] = l;
     return {
@@ -1012,6 +1076,7 @@ const API = {
       }
       await tx.query('update trk.renfrew_checks set counted_qty = $3::int where shipment_id = $1 and line_id = $2', [id, check.line_id, counted]);
     }
+    await assertReceivedFloor(tx, id);
     const completed = await autoCompleteCount(tx, id, user);
     return Object.assign(await API.getShipment(tx, { shipmentId: id }), { completed });
   },
@@ -1051,18 +1116,34 @@ const API = {
     const user = requireUser(ctx);
     const group = await openCountGroup(tx, shipmentIds);
     const checks = await groupChecks(tx, group.open);
+    const floors = {};
+    for (const s of group.open) floors[s.shipmentId] = await receivedFloors(tx, s.shipmentId);
     const touched = new Set();
     for (const c of Array.isArray(counts) ? counts : []) {
-      const lines = checks.filter((x) => itemKey(x) === String(c.key));
+      const key = String(c.key);
+      const lines = checks.filter((x) => itemKey(x) === key);
       if (!lines.length) throw new UserError('This item is not on the Renfrew list.');
       const total = wholeNumber(c.counted, 'Counted qty');
-      const put = lines.reduce((n, x) => n + Number(x.put_qty), 0);
-      if (total < put) {
-        throw new UserError(`${lines[0].product_name || lines[0].upc}: ${put} already put away, so the count cannot be lower than that.`);
-      }
-      // Each line keeps at least what was put away; the rest fills the oldest shipment first
+      // Each line keeps at least what was put away, and each shipment at least what Shopify already received
       const alloc = lines.map((x) => Number(x.put_qty));
-      let rest = total - put;
+      for (const sid of new Set(lines.map((x) => x.shipment_id))) {
+        for (const f of floors[sid] || []) {
+          if (!f.upcs.includes(normUpc(lines[0].upc))) continue;
+          const idx = lines.map((x, i) => i).filter((i) => lines[i].shipment_id === sid);
+          // Other UPCs of the same Shopify item keep their counts
+          const others = checks.filter((x) => x.shipment_id === sid && itemKey(x) !== key && f.upcs.includes(normUpc(x.upc)))
+            .reduce((n, x) => n + Number(x.counted_qty), 0);
+          const need = f.received - others - idx.reduce((n, i) => n + alloc[i], 0);
+          if (need > 0) alloc[idx[0]] += need;
+        }
+      }
+      const floor = alloc.reduce((n, a) => n + a, 0);
+      if (total < floor) {
+        const put = lines.reduce((n, x) => n + Number(x.put_qty), 0);
+        throw new UserError(`${lines[0].product_name || lines[0].upc}: ${floor} already ${floor > put ? 'received in Shopify or put away' : 'put away'}, so the count cannot be lower than that.`);
+      }
+      // The rest fills the oldest shipment first
+      let rest = total - floor;
       lines.forEach((x, i) => {
         const add = Math.min(rest, Math.max(0, Number(x.expected_qty) - alloc[i]));
         alloc[i] += add; rest -= add;
@@ -1075,6 +1156,7 @@ const API = {
         touched.add(lines[i].shipment_id);
       }
     }
+    for (const id of touched) await assertReceivedFloor(tx, id);
     const completed = [];
     for (const id of touched) if (await autoCompleteCount(tx, id, user)) completed.push(id);
     return Object.assign(await countGroupOut(tx, await openCountGroup(tx, shipmentIds)), { completed });
@@ -1188,6 +1270,9 @@ const API = {
     const autoNA = step === '4a' && row.s5_by === SYSTEM_USER && row.s4b_by === SYSTEM_USER;
     const blocking = LATER[step].filter((s) => shipment.steps[s] && !(autoNA && s === '5'));
     if (blocking.length) throw new UserError(`Undo the later step(s) first: ${blocking.join(', ')}.`);
+    if (step === '4a' && anyReceived(await loadTransferRow(tx, id, false))) {
+      throw new UserError('The Shopify transfer was already (partly) received at Renfrew, so step 4a cannot be undone.');
+    }
     if (STEP_PASSWORD[step]) await verifyPassword(tx, ctx, [STEP_PASSWORD[step][0]], password, STEP_PASSWORD[step][1]);
     if (step === '4b') await tx.query('update trk.shipments set s4b_note = null where shipment_id = $1', [id]);
     if (step === '5') await tx.query('update trk.shipments set s5_note = null where shipment_id = $1', [id]);

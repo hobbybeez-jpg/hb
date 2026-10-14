@@ -30,7 +30,7 @@
 | 3 | 主管1 | 確認入庫存 | 步驟 2；主管1 密碼；庫存系統尚未 Finalize 時會提醒 |
 | 4a | 主管2 | 商品上架系統；有 Renfrew 商品時自動在 Shopify 建立調貨單（運送中） | 步驟 3；主管2 密碼 |
 | 4b | Renfrew 店員 | 清點到貨商品（掃描 UPC 每次 +1，或直接輸入），**每掃一次就存檔**，可以分批、隔天繼續；全部點齊自動完成，缺貨可填備註後按 Complete 4b | 步驟 2（和 3 平行，不用等 3） |
-| 5 | Renfrew 店員 | 4a、4b 都完成後，掃描 Pending 的商品上架店內（4a 完成後店員才看得到價格、打條碼）；按「Confirm transfer received」把 Shopify 調貨單標為已收貨 | 完成後進貨表自動隱藏（「已完成」可查） |
+| 5 | Renfrew 店員 | 掃描 Pending 的商品上架店內（4a 完成後店員才看得到價格、打條碼）。**4a 完成後就能先上架已到、已點的商品，不用等 4b**；按「Receive counted in Shopify」先收已點的數量。4b 完成後才能完成步驟 5 | 完成後進貨表自動隱藏（「已完成」可查） |
 
 - 步驟 2 之後分成兩條平行支線：**3 → 4a**（主管）與 **4b**（Renfrew）。兩條都完成才能做 5。
   進度條中間分上下兩排：上排＝3、4a，下排＝4b。
@@ -39,6 +39,8 @@
 - **密碼只用在步驟 3、4a 和它們的 Undo**（3＝主管1 密碼，4a＝主管2 密碼）；步驟 2、4b、5 和它們的 Undo 都不需要密碼。
   Shopify 的動作另外需要密碼：建立／重試調貨單＝主管2 密碼，Unlink＝管理密碼；標為已收貨（Confirm transfer received）和步驟 5 一樣不需要主管密碼。
 - 撤銷 4b 只會重新打開清點，已點的數量和已歸架的商品都保留，可以直接修改。
+- **分批到貨先上架**：4a 完成、4b 還沒完成時，步驟 5 卡片顯示「4b still open」和「Shelve Arrived Items」，可以先把 Pending 裡已到的商品掃上店面；
+  步驟 5 的完成按鈕要等 4b 完成（全部點齊，或短缺填備註）才能按。燈號 5 也會算「4a 已完成、Pending 有貨可上架」的單。
 - **多張單一起點（同一供應商）**：4b 清點視窗上方的「Count together with other … shipments」可勾選同一供應商、步驟 2 已完成、4b 未完成的其他單，
   在同一個清單一起掃描（同一商品合併成一行，下方顯示每張單的數量）。
   - 同一個 UPC 在多張單上時，**從最早的單開始填**，填滿應到數量再填下一張，多出來的算在最新的一張；手動輸入總數也照這個規則拆（每張單至少保留已歸架數量）。
@@ -164,8 +166,12 @@ on conflict (key) do update set value = excluded.value, updated_at = now();
     明細的「Shopify Transfer」區會列出是哪些商品；修正 Shopify 的 Barcode 後按「Manager 2: Try again」。
   - 4a 本身照樣完成，不會因為 Shopify 出錯而失敗。
   - 4a 完成時 Shopify 還沒連動的舊單，可以在明細按「Manager 2: Create Shopify transfer」補建。
-- **步驟 5 開始後（4a、4b 都完成）**：步驟 5 卡片和「Shopify Transfer」區會出現 **Confirm transfer received**，
-  Renfrew 店員按下並確認後（不需要主管密碼），把調貨單標為已收貨，收貨數量＝**4b 實際點到的數量**（最多到調貨數量）。
+- **分批到貨、分次收貨（4a 完成後）**：商品陸續到 Renfrew 時，4b 還沒完成也可以先收貨。
+  步驟 5 卡片和「Shopify Transfer」區會出現 **Receive counted in Shopify (X pcs)**，X＝已點但還沒收貨的數量；
+  按下並確認後（不需要主管密碼）只收這個差額，調貨單顯示「received N/M so far」（部分收貨），其餘仍在運送中。之後再點到貨可以再按一次。
+  - 收過的數量**不能再往下改**：4b 的清點數量不能低於已在 Shopify 收貨的數量（合併點貨的重新分配也一樣）；真的點錯要到 Shopify 手動調整庫存。
+  - 收過任何數量後，**不能撤銷 4a，也不能 Unlink 調貨單**。
+- **4b 完成後**：按鈕變成 **Confirm transfer received**，收最後一次，調貨單標為已收貨，收貨數量合計＝**4b 實際點到的數量**（最多到調貨數量）。
   短少的數量在 Shopify 保持「未收貨」，請到 Shopify 處理（例如之後補收或拒收）。
 - 完成步驟 5 時如果調貨單還沒收貨，會提醒。
 
@@ -175,7 +181,7 @@ on conflict (key) do update set value = excluded.value, updated_at = now();
 - 呼叫 Shopify 前會先「佔住」這張單，兩個人同時按也只會建立一次；Shopify 的請求帶有 idempotency key，
   而且調貨單有專屬的 tag（`trk-…`），網路中斷後重試會找到原本那張，不會重複建立或重複收貨。
 - 要重新建立（例如數量錯了）：先在 Shopify **取消**原本的調貨單，再在明細按「Unlink」（管理密碼），然後按「Create Shopify transfer」。
-  已收貨的調貨單不能 Unlink。
+  已收貨（包括部分收貨）的調貨單不能 Unlink。
 
 **設定步驟**
 
