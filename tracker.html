@@ -415,9 +415,10 @@
       <b>Workflow</b><br />
       1 Inventory staff import the shipment (it appears here automatically) → 2 Warehouse counts and taps "Qty Confirmed" → two parallel lanes:
       [3 Manager 1 confirms inventory (password) → 4a Manager 2 lists online (password)] and [4b Renfrew staff count and put away] →
-      5 once both lanes are done, Renfrew staff scan Pending items onto the store floor; the shipment is then hidden.<br />
-      When Shopify is connected: step 4a also creates a Shopify transfer Marine Drive → Renfrew (in transit), and from step 5 Renfrew staff
-      marks it received with "Confirm transfer received" (the quantities counted in 4b).
+      5 Renfrew staff scan Pending items onto the store floor. Items that arrive at different times: after 4a, what has been counted
+      can go onto the store floor before 4b is complete; step 5 is completed (and the shipment hidden) after 4b.<br />
+      When Shopify is connected: step 4a also creates a Shopify transfer Marine Drive → Renfrew (in transit). After 4a, Renfrew staff
+      receive what has been counted so far with "Receive counted in Shopify", and confirm the transfer received after 4b.
     </div>
   </section>
 </main>
@@ -660,7 +661,7 @@ function refreshCurrent() {
 function progressBar(s) {
   const steps = s.steps; const now = s.nextSteps || [];
   const isNA = (k) => s.renfrewNA && (k === '4b' || k === '5');
-  const cls = (k) => (steps[k] ? 'done' : isNA(k) ? 'na' : now.includes(k) ? 'now' : '');
+  const cls = (k) => (steps[k] ? 'done' : isNA(k) ? 'na' : now.includes(k) || (k === '5' && s.partialShelf) ? 'now' : '');
   return `<div class="progress" title="1 Imported · 2 Qty Confirmed · top lane: 3 Inventory Confirmed → 4a Listed Online · bottom lane: 4b Renfrew Count · 5 On Store Shelf">
     <div class="seg done"></div><div class="seg ${cls('2')}"></div>
     <div class="branch"><div><span class="${cls('3')}"></span><span class="${cls('4a')}"></span></div>
@@ -670,6 +671,8 @@ function progressBar(s) {
 // Flow: 1 -> 2 -> two parallel lanes [3 -> 4a] and [4b] -> 5; the server works out the next steps
 const LATER = { '2': ['3', '4b'], '3': ['4a'], '4a': ['5'], '4b': ['5'], '5': [] };
 const PASSWORD_STEPS = { '3': 'Manager 1: Confirm Inventory', '4a': 'Manager 2: Listed Online' };
+// A shipment waits for step k (lights, list filter); step 5 also when arrived items can be shelved before 4b is done
+function waitsFor(s, k) { return s.nextSteps.includes(k) || (k === '5' && !!s.shelveNow); }
 function stepTag(s, k) {
   const prog = k === '4b' && s.countedUnits ? ` (${s.countedUnits}/${s.renfrewUnits})` : '';
   return `<span class="tag warn">${k} ${esc(STEP_LABELS[k])}${prog}</span>`;
@@ -688,7 +691,7 @@ async function loadList() {
     // The open list already has every shipment's next steps: count the lights from it
     if (state.filter === 'open') {
       const counts = { '3': 0, '4a': 0, '4b': 0, '5': 0 };
-      for (const s of state.shipments) for (const k of s.nextSteps) if (k in counts) counts[k] += 1;
+      for (const s of state.shipments) for (const k of Object.keys(counts)) if (waitsFor(s, k)) counts[k] += 1;
       state.taskCounts = counts;
       renderTasks();
     }
@@ -700,7 +703,7 @@ async function loadList() {
 function renderList() {
   const q = $('#listFilter').value.trim().toLowerCase();
   const rows = state.shipments.filter((s) => (!q || (s.supplier + ' ' + s.name).toLowerCase().includes(q))
-    && (!state.stepFilter || (!s.done && s.nextSteps.includes(state.stepFilter))));
+    && (!state.stepFilter || (!s.done && waitsFor(s, state.stepFilter))));
   const box = $('#shipList');
   const stepChip = state.stepFilter
     ? `<div class="row" style="margin-bottom:10px"><button class="step-filter" type="button" id="clearStep">Waiting for step ${esc(state.stepFilter)} ${esc(STEP_LABELS[state.stepFilter])} ✕</button></div>` : '';
@@ -709,7 +712,8 @@ function renderList() {
     bindStepChip();
     return;
   }
-  const next = (s) => (s.done ? `<span class="tag ok">Completed ${fmtDate(s.steps['5'].at)}</span>` : s.nextSteps.map((k) => stepTag(s, k)).join(' '))
+  const next = (s) => (s.done ? `<span class="tag ok">Completed ${fmtDate(s.steps['5'].at)}</span>` : s.nextSteps.map((k) => stepTag(s, k)).join(' ')
+      + (s.shelveNow && !s.nextSteps.includes('5') ? ` <span class="tag warn">5 Shelve arrived items (${s.pendingUnits})</span>` : ''))
     + (s.unputUnits > 0 ? ` <span class="tag warn">📦 To put away ${s.unputUnits}</span>` : '');
   // Phones: one card per shipment; larger screens: the table
   const cards = `<div class="ship-cards show-sm">${rows.map((s) => `
@@ -821,15 +825,18 @@ async function loadDetail(id) {
 function stepCard(s, k) {
   const done = s.steps[k];
   const na = !done && s.renfrewNA && (k === '4b' || k === '5');
-  const now = s.nextSteps.includes(k);
+  // Step 5 opens after 4a even while 4b is still open (items arrive at Renfrew at different times)
+  const partial = k === '5' && s.partialShelf;
+  const now = s.nextSteps.includes(k) || partial;
   let action = '';
   if (now && k === '2') {
     // Step 2 is done in the inventory system (Receiving page, "Qty Confirmed" button)
     action = '<div class="small muted">Waiting for "Qty Confirmed" in the inventory system (Receiving page)</div>';
   } else if (now) {
-    const labels = { '3': '🔒 Manager 1: Confirm Inventory', '4a': '🔒 Manager 2: Mark Listed', '4b': s.countedUnits ? 'Continue Count' : 'Start Count', '5': 'Scan to Store Shelf' };
-    action = `<button class="btn ${k === '5' ? 'ok' : 'primary'} small" type="button" data-step="${k}">${labels[k]}</button>`;
-    if (k === '5' && canReceive(state.detail)) action += receiveButton();
+    const labels = { '3': '🔒 Manager 1: Confirm Inventory', '4a': '🔒 Manager 2: Mark Listed', '4b': s.countedUnits ? 'Continue Count' : 'Start Count', '5': partial ? 'Shelve Arrived Items' : 'Scan to Store Shelf' };
+    if (partial) action = `<div class="small muted">4b still open: shelve what has arrived (${s.pendingUnits} in Pending). Complete step 5 after 4b.</div>`;
+    action += `<button class="btn ${k === '5' ? 'ok' : 'primary'} small" type="button" data-step="${k}">${labels[k]}</button>`;
+    if (k === '5' && canReceive(state.detail)) action += receiveButton(state.detail);
   }
   const undo = done && k !== '1' && canUndo(s, k) ? ` · <button class="link" type="button" data-undo="${k}">Undo</button>` : '';
   const prog = k === '4b' && s.renfrewUnits ? `<div class="count-prog">${s.countedUnits}/${s.renfrewUnits} pcs counted</div>` : '';
@@ -846,6 +853,8 @@ function stepCard(s, k) {
 function canUndo(s, k) {
   // Steps skipped automatically (no Renfrew items) are undone together with 4a
   if (s.steps[k] && s.steps[k].by === 'System') return false;
+  // Once Shopify received anything, 4a stays
+  if (k === '4a' && transferReceived(state.detail && state.detail.shopifyTransfer)) return false;
   const auto = (x) => k === '4a' && x === '5' && s.steps['5'] && s.steps['5'].by === 'System';
   return LATER[k] && !LATER[k].some((x) => s.steps[x] && !auto(x));
 }
@@ -1022,15 +1031,23 @@ function transferTag(t) {
     CREATED: `<span class="tag warn">Shopify ${transferLink(t)}: in transit</span>`,
     RECEIVING: `<span class="tag bad">Shopify ${transferLink(t)}: receiving interrupted</span>`,
     RECEIVE_ERROR: `<span class="tag bad">Shopify ${transferLink(t)}: not received</span>`,
+    PARTIAL: `<span class="tag warn">Shopify ${transferLink(t)}: received ${t.receivedQty}/${t.totalQty} so far</span>`,
     RECEIVED: `<span class="tag ok">Shopify ${transferLink(t)}: received ${t.receivedQty}/${t.totalQty}</span>`
   };
   return map[t.status] || '';
 }
+function transferReceived(t) { return !!t && (t.status === 'RECEIVED' || t.status === 'PARTIAL' || t.receivedQty > 0); }
+// After 4a: receive what was counted so far (4b open), or the last receive after 4b
 function canReceive(d) {
   const t = d && d.shopifyTransfer; const s = d && d.shipment;
-  return !!(t && s && s.steps['4a'] && s.steps['4b'] && !t.busy && ['CREATED', 'RECEIVE_ERROR', 'RECEIVING'].includes(t.status));
+  if (!t || !s || !s.steps['4a'] || t.busy) return false;
+  const open = ['CREATED', 'PARTIAL', 'RECEIVE_ERROR', 'RECEIVING'].includes(t.status) || (t.status === 'RECEIVED' && !s.steps['4b']);
+  return open && (!!s.steps['4b'] || t.receivable > 0);
 }
-function receiveButton() { return ' <button class="btn primary small" type="button" data-shopify="receive">Confirm transfer received</button>'; }
+function receiveButton(d) {
+  const label = d.shipment.steps['4b'] ? 'Confirm transfer received' : `Receive counted in Shopify (${d.shopifyTransfer.receivable} pcs)`;
+  return ` <button class="btn primary small" type="button" data-shopify="receive">${label}</button>`;
+}
 function shopifySection(d) {
   const s = d.shipment; const t = d.shopifyTransfer;
   if (!t && !(shopifyConnected() && s.renfrewUnits > 0)) return '';
@@ -1042,12 +1059,12 @@ function shopifySection(d) {
   } else {
     const retry = !t.busy && ['ERROR', 'CREATING', 'PENDING'].includes(t.status)
       ? ' <button class="btn small" type="button" data-shopify="create">🔒 Manager 2: Try again</button>' : '';
-    const unlink = !t.busy && t.status !== 'RECEIVED' ? ' · <button class="link" type="button" data-shopify="unlink">Unlink</button>' : '';
-    body = `<div class="row">${transferTag(t)}${retry}${canReceive(d) ? receiveButton() : ''}</div>
+    const unlink = !t.busy && !transferReceived(t) ? ' · <button class="link" type="button" data-shopify="unlink">Unlink</button>' : '';
+    body = `<div class="row">${transferTag(t)}${retry}${canReceive(d) ? receiveButton(d) : ''}</div>
       ${t.error ? `<div class="err small" style="margin-top:6px">${esc(t.error)}</div>` : ''}
       <div class="small muted" style="margin-top:6px">${t.totalQty ? `${t.totalQty} pcs · ` : ''}${t.createdAt ? `created ${fmtTime(t.createdAt)}${t.createdBy ? ' by ' + esc(t.createdBy) : ''}` : ''}
         ${t.receivedAt ? ` · received ${fmtTime(t.receivedAt)} by ${esc(t.receivedBy)}` : ''}${unlink}</div>
-      ${t.status === 'CREATED' && !canReceive(d) ? '<div class="small muted">"Confirm transfer received" appears when steps 4a and 4b are both done.</div>' : ''}`;
+      ${['CREATED', 'PARTIAL'].includes(t.status) && !canReceive(d) ? '<div class="small muted">"Receive counted in Shopify" appears when units counted in 4b are not received yet.</div>' : ''}`;
   }
   return `<div class="section-title">Shopify Transfer <span class="small muted">Marine Drive → Renfrew</span></div><div class="card small">${body}</div>`;
 }
@@ -1057,10 +1074,13 @@ async function shopifyAction(kind) {
   const label = `${s.supplier} · ${s.name}`;
   try {
     if (kind === 'receive') {
-      if (!confirm(`${label}\n\nMark Shopify transfer ${t.name} as received at Renfrew with the quantities counted in 4b?`)) return false;
+      const question = s.steps['4b']
+        ? `Mark Shopify transfer ${t.name} as received at Renfrew with the quantities counted in 4b?`
+        : `Receive ${t.receivable} counted unit(s) of Shopify transfer ${t.name} at Renfrew now?\n\nThe rest stays in transit until it is counted. After this, the 4b count cannot go below what was received.`;
+      if (!confirm(`${label}\n\n${question}`)) return false;
       state.detail = await api('shopifyReceiveTransfer', { shipmentId: s.shipmentId });
       const r = state.detail.shopifyTransfer;
-      toast(`Shopify transfer ${r.name} received: ${r.receivedQty}/${r.totalQty} pcs`, 'ok');
+      toast(`Shopify transfer ${r.name} received${r.status === 'PARTIAL' ? ' so far' : ''}: ${r.receivedQty}/${r.totalQty} pcs`, 'ok');
     } else if (kind === 'create') {
       const pw = await askPassword('Create Shopify transfer', `${label}. Creates a transfer Marine Drive → Renfrew (in transit) with the RENFREW quantities. Manager 2 password required.`);
       if (pw == null) return false;
@@ -1305,7 +1325,8 @@ function openStep5() {
     const unput = d.checks.filter((c) => c.countedQty > c.putQty);
     const t = d.shopifyTransfer;
     body.innerHTML = `
-      ${t ? `<div class="row small">${transferTag(t)}<span class="grow"></span>${canReceive(d) ? receiveButton() : ''}</div>` : ''}
+      ${t ? `<div class="row small">${transferTag(t)}<span class="grow"></span>${canReceive(d) ? receiveButton(d) : ''}</div>` : ''}
+      ${d.shipment.steps['4b'] ? '' : `<div class="note-box">4b is still open (${d.shipment.countedUnits}/${d.shipment.renfrewUnits} pcs counted): shelve the items that have arrived. Step 5 can be completed after 4b.</div>`}
       <div class="small muted">Scan items from Pending: each scan = one unit onto the store floor.</div>
       <form class="scanbox" id="s5Scan"><input class="inp" inputmode="numeric" autocomplete="off" placeholder="Scan UPC" />
         <button class="btn scan-btn" type="button">📷</button></form>
@@ -1314,6 +1335,9 @@ function openStep5() {
       <div class="list">${pending.map((x) => `<div class="item"><div class="nm"><b>${esc(x.productName)}</b><span class="mono muted">${esc(x.upc)}</span></div><span class="tag pending">Pending × ${x.qty}</span></div>`).join('')
         || '<div class="empty" style="padding:12px">✅ Pending is empty</div>'}</div>
       ${d.stock.filter((x) => x.locationCode !== 'PENDING').length ? `<div class="small muted">Other locations: ${d.stock.filter((x) => x.locationCode !== 'PENDING').map((x) => `${esc(x.productName)} (${esc(x.locationCode)} × ${x.qty})`).join(', ')}</div>` : ''}`;
+    const ok = $('[data-a=ok]', m.foot);
+    ok.disabled = !d.shipment.steps['4b'];
+    ok.textContent = d.shipment.steps['4b'] ? 'Complete step 5 (hide shipment)' : 'Complete step 5 (after 4b)';
     const form = $('#s5Scan', body); const input = $('input', form);
     $$('[data-shopify]', body).forEach((b) => (b.onclick = async () => { if (await shopifyAction(b.dataset.shopify)) render(); }));
     form.onsubmit = (e) => { e.preventDefault(); const v = input.value.trim(); input.value = ''; if (v) scan(v); };
