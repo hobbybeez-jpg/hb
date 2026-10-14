@@ -499,7 +499,7 @@ async function api(fn, args) {
   if (STEP_CHANGING.has(fn)) setTimeout(refreshTasks, 0);
   return body.result;
 }
-const STEP_CHANGING = new Set(['completeStep', 'undoStep', 'countScan', 'setCounts']);
+const STEP_CHANGING = new Set(['completeStep', 'undoStep', 'countScan', 'setCounts', 'countScanGroup', 'setCountsGroup', 'completeCountGroup']);
 
 // When the server asks for confirmation (code=CONFIRM), ask and resend with force
 async function apiConfirm(fn, args) {
@@ -1094,6 +1094,21 @@ function openCount() {
     onClose: () => { if (state.detailId === id) loadDetail(id); refreshPutBadge(); } });
   let queue = Promise.resolve();
   let finished = false;
+  // Other open shipments of the same supplier that can be counted together with this one
+  let others = [];
+  const renderOffer = () => {
+    const box = $('#groupOffer', body);
+    if (!box) return;
+    box.innerHTML = others.length ? `<button class="link" type="button">Count together with other ${esc(s0.supplier)} shipments (${others.length})…</button>` : '';
+    const b = $('button', box);
+    if (b) b.onclick = () => pickCountGroup(s0, others, (ids) => (queue = queue.then(() => {
+      finished = true; m.close(); openCountGroup(s0.supplier, ids);
+    })));
+  };
+  api('listShipments', { filter: 'open' }).then((list) => {
+    others = list.filter((x) => x.shipmentId !== id && x.supplier === s0.supplier && x.steps['2'] && !x.steps['4b'] && !x.renfrewNA);
+    if (!finished) renderOffer();
+  }).catch(() => {});
   const after = (r, flashLine) => {
     state.detail = r;
     if (r.completed) return done('All items counted — 4b complete');
@@ -1114,6 +1129,7 @@ function openCount() {
     const over = checks.filter((c) => c.countedQty > c.expectedQty).length;
     const note = $('#countNote', body) ? $('#countNote', body).value : '';
     body.innerHTML = `
+      <div class="row small" id="groupOffer"></div>
       <div class="small muted">Scan each item: every scan adds 1 and is saved right away. You can stop and continue later, or type a number.</div>
       <form class="scanbox" id="countScan"><input class="inp" inputmode="numeric" autocomplete="off" placeholder="Scan UPC" />
         <button class="btn scan-btn" type="button">📷</button></form>
@@ -1138,6 +1154,7 @@ function openCount() {
       const it = $(`#countList .item[data-line="${CSS.escape(flashLine)}"]`, body);
       if (it) { it.classList.add('flash'); it.scrollIntoView({ block: 'nearest' }); }
     }
+    renderOffer();
     setTimeout(() => input.focus(), 30);
   };
   // Scans are sent one at a time so fast scanners keep their order
@@ -1164,6 +1181,114 @@ function openCount() {
     }
   }));
   render();
+}
+
+// Choose other shipments of the same supplier to count together with s0
+function pickCountGroup(s0, others, onPick) {
+  const m = modal({ title: `Count together · ${s0.supplier}`, narrow: true,
+    body: `<div class="small muted">Scan all chosen shipments in one list. A product on several shipments fills the oldest shipment first; extra goes to the newest. Each shipment completes 4b on its own.</div>
+      <label class="row"><input type="checkbox" checked disabled /><b>${esc(s0.name)}</b><span class="muted small">this shipment</span></label>
+      ${others.map((x) => `<label class="row"><input type="checkbox" data-id="${esc(x.shipmentId)}" /><b>${esc(x.name)}</b>
+        <span class="muted small">${fmtTime(x.createdAt)}${x.countedUnits ? ` · ${x.countedUnits} pcs counted` : ''}</span></label>`).join('')}`,
+    foot: '<button class="btn" type="button" data-a="cancel">Cancel</button><button class="btn primary" type="button" data-a="ok">Start count</button>' });
+  $('[data-a=cancel]', m.foot).onclick = m.close;
+  $('[data-a=ok]', m.foot).onclick = () => {
+    const ids = $$('input[data-id]:checked', m.body).map((x) => x.dataset.id);
+    if (!ids.length) return toast('Choose at least one other shipment.', 'bad');
+    m.close();
+    onPick([s0.shipmentId, ...ids]);
+  };
+}
+
+// 4b count for several shipments of one supplier in one list (one row per product)
+function openCountGroup(supplier, ids) {
+  const body = document.createElement('div');
+  body.className = 'list';
+  body.innerHTML = '<div class="empty"><span class="spin"></span> Loading…</div>';
+  const m = modal({ title: `4b Renfrew Count · ${supplier} · ${ids.length} shipments`, body,
+    foot: '<button class="btn" type="button" data-a="close">Close (saved)</button><button class="btn primary" type="button" data-a="ok">Complete 4b</button>',
+    onClose: () => { if (state.detailId && ids.includes(state.detailId)) loadDetail(state.detailId); else if (!state.detailId) loadList(); refreshPutBadge(); } });
+  let g = null;
+  let queue = Promise.resolve();
+  let finished = false;
+  const shipName = (sid) => (g.shipments.find((s) => s.shipmentId === sid) || { name: sid }).name;
+  const after = (r, flashKey) => {
+    g = r;
+    if (g.shipments.every((s) => s.steps['4b'])) return done('All shipments counted — 4b complete');
+    for (const sid of r.completed || []) toast(`${shipName(sid)}: 4b complete`, 'ok');
+    render(flashKey);
+  };
+  const done = (message) => {
+    finished = true;
+    toast(message, 'ok');
+    m.close();
+    if (g.shipments.some((s) => s.unputUnits > 0)) openPutaway();
+  };
+  const render = (flashKey) => {
+    const items = g.items;
+    const expected = items.reduce((n, i) => n + i.expectedQty, 0);
+    const counted = items.reduce((n, i) => n + i.countedQty, 0);
+    const ok = items.filter((i) => i.countedQty === i.expectedQty).length;
+    const over = items.filter((i) => i.countedQty > i.expectedQty).length;
+    const per = (sid, k) => items.reduce((n, i) => n + i.lines.filter((l) => l.shipmentId === sid).reduce((a, l) => a + l[k], 0), 0);
+    const note = $('#countNote', body) ? $('#countNote', body).value : '';
+    body.innerHTML = `
+      <div class="small muted">Scan items from all chosen shipments: every scan adds 1 and is saved right away. A product on several shipments fills the oldest shipment first. Each shipment completes 4b by itself when all its items match.</div>
+      <div class="row small">${g.shipments.map((s) => s.steps['4b']
+        ? `<span class="tag ok">✓ ${esc(s.name)} 4b done</span>`
+        : `<span class="tag">${esc(s.name)} · ${per(s.shipmentId, 'countedQty')}/${per(s.shipmentId, 'expectedQty')} pcs</span>`).join('')}</div>
+      <form class="scanbox" id="countScan"><input class="inp" inputmode="numeric" autocomplete="off" placeholder="Scan UPC" />
+        <button class="btn scan-btn" type="button">📷</button></form>
+      <div class="row"><b>${counted}/${expected} pcs</b><span class="tag ok">Match ${ok}</span>${over ? `<span class="tag bad">Over ${over}</span>` : ''}<span class="tag">Open ${items.length - ok - over}</span>
+        <span class="grow"></span><button class="btn small" type="button" id="allMatch">All match expected</button></div>
+      <div class="list" id="countList">${items.map((i) => `
+        <div class="item" data-key="${esc(i.key)}" style="border-color:${i.countedQty === i.expectedQty ? '#7fd0a6' : i.countedQty > i.expectedQty ? '#f5a3ae' : i.countedQty ? '#ecd462' : ''}">
+          <div class="nm"><b>${esc(i.productName)}</b><span class="mono muted">${esc(i.upc)}</span>
+            <div class="small muted">${i.lines.map((l) => `${esc(shipName(l.shipmentId))} ${l.countedQty}/${l.expectedQty}`).join(' · ')}${i.putQty ? ` · ${i.putQty} put away` : ''}</div></div>
+          <div class="small">Expected <b>${i.expectedQty}</b></div>
+          <input class="inp qty" type="number" min="${i.putQty}" inputmode="numeric" value="${i.countedQty}" />
+        </div>`).join('')}</div>
+      <label class="f">Note (required to complete when quantities don't match; saved on each shipment that doesn't match)<textarea class="inp" id="countNote" rows="2">${esc(note)}</textarea></label>`;
+    const form = $('#countScan', body); const input = $('input', form);
+    form.onsubmit = (e) => { e.preventDefault(); const v = input.value.trim(); input.value = ''; if (v) scan(v); };
+    $('.scan-btn', form).onclick = () => openScanner((code) => scan(code), { continuous: true });
+    $('#allMatch', body).onclick = () => save(items.map((i) => ({ key: i.key, counted: i.expectedQty })));
+    $$('#countList .item', body).forEach((it) => {
+      const field = $('input', it);
+      field.onchange = () => save([{ key: it.dataset.key, counted: Math.max(0, parseInt(field.value, 10) || 0) }]);
+    });
+    if (flashKey) {
+      const it = $(`#countList .item[data-key="${CSS.escape(flashKey)}"]`, body);
+      if (it) { it.classList.add('flash'); it.scrollIntoView({ block: 'nearest' }); }
+    }
+    setTimeout(() => input.focus(), 30);
+  };
+  // Scans are sent one at a time so fast scanners keep their order
+  const scan = (code) => (queue = queue.then(async () => {
+    if (finished || !g) return;
+    try {
+      const r = await api('countScanGroup', { shipmentIds: ids, upc: code });
+      beep(true);
+      after(r, r.scanned.key);
+    } catch (e) { beep(false); toast(e.message, 'bad'); }
+  }));
+  const save = (counts) => (queue = queue.then(async () => {
+    if (finished || !g) return;
+    try { after(await api('setCountsGroup', { shipmentIds: ids, counts })); } catch (e) { toast(e.message, 'bad'); render(); }
+  }));
+  $('[data-a=close]', m.foot).onclick = m.close;
+  $('[data-a=ok]', m.foot).onclick = () => (queue = queue.then(async () => {
+    if (finished || !g) return;
+    try {
+      after(await api('completeCountGroup', { shipmentIds: ids, note: $('#countNote', body).value }));
+    } catch (e) {
+      toast(e.code === 'NEED_NOTE' ? e.message + ' (for a short shipment, explain what is missing)' : e.message, 'bad');
+      if (e.code === 'NEED_NOTE') $('#countNote', body).focus();
+    }
+  }));
+  queue = queue.then(async () => {
+    try { g = await api('getCountGroup', { shipmentIds: ids }); render(); } catch (e) { toast(e.message, 'bad'); finished = true; m.close(); }
+  });
 }
 
 // ----- Step 5: scan Pending items onto the store floor -----
