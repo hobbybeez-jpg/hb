@@ -500,6 +500,61 @@ async function openCount(tx, shipmentId) {
   return { id, shipment };
 }
 
+// Count several shipments together: same supplier, step 2 done. Shipments whose 4b is already
+// complete stay in the group (shown as done) but are not counted any more.
+async function openCountGroup(tx, shipmentIds) {
+  const ids = [...new Set((Array.isArray(shipmentIds) ? shipmentIds : []).map((x) => cleanText(x, 300)).filter(Boolean))];
+  if (!ids.length) throw new UserError('Choose at least one shipment.');
+  if (ids.length > 20) throw new UserError('Choose 20 shipments or fewer.');
+  // Lock in a fixed order so two people counting overlapping groups cannot block each other
+  for (const id of [...ids].sort()) await tx.query('select 1 from trk.shipments where shipment_id = $1 for update', [id]);
+  const shipments = [];
+  for (const id of ids) shipments.push(shipmentOut(await loadShipmentRow(tx, id)));
+  if (shipments.some((s) => s.supplier !== shipments[0].supplier)) {
+    throw new UserError('Only shipments from the same supplier can be counted together.');
+  }
+  // Oldest first: a UPC on several shipments fills the oldest one first
+  shipments.sort((a, b) => (new Date(a.createdAt || 0) - new Date(b.createdAt || 0)) || (a.shipmentId < b.shipmentId ? -1 : 1));
+  const open = [];
+  for (const s of shipments) {
+    if (!s.steps['2']) throw new UserError(`${s.name}: step 2 "Qty Confirmed" must be done before the Renfrew count.`);
+    if (s.renfrewNA) throw new UserError(`${s.name}: this shipment has no items for Renfrew.`);
+    if (s.steps['4b']) continue;
+    await syncChecks(tx, s.shipmentId, await loadLines(tx, s.shipmentId));
+    open.push(s);
+  }
+  return { shipments, open };
+}
+
+// Checks of the open shipments, oldest shipment first
+async function groupChecks(tx, open) {
+  const out = [];
+  for (const s of open) out.push(...await loadChecks(tx, s.shipmentId));
+  return out;
+}
+
+// One row per product in the group (lines without a UPC stay on their own)
+function itemKey(c) { return normUpc(c.upc) || `${c.shipment_id}|${c.line_id}`; }
+
+async function countGroupOut(tx, { shipments, open }) {
+  const fresh = [];
+  for (const s of shipments) fresh.push(shipmentOut(await loadShipmentRow(tx, s.shipmentId)));
+  const items = [];
+  const byKey = {};
+  for (const c of await groupChecks(tx, open)) {
+    const key = itemKey(c);
+    let it = byKey[key];
+    if (!it) {
+      it = byKey[key] = { key, upc: c.upc || '', productName: c.product_name || '', expectedQty: 0, countedQty: 0, putQty: 0, lines: [] };
+      items.push(it);
+    }
+    it.expectedQty += Number(c.expected_qty); it.countedQty += Number(c.counted_qty); it.putQty += Number(c.put_qty);
+    it.lines.push({ shipmentId: c.shipment_id, lineId: c.line_id, expectedQty: Number(c.expected_qty), countedQty: Number(c.counted_qty), putQty: Number(c.put_qty) });
+  }
+  items.sort((a, b) => a.productName.localeCompare(b.productName));
+  return { shipments: fresh, items };
+}
+
 // 4b completes by itself once every item is counted exactly
 async function autoCompleteCount(tx, id, user) {
   const checks = await loadChecks(tx, id);
@@ -959,6 +1014,87 @@ const API = {
     }
     const completed = await autoCompleteCount(tx, id, user);
     return Object.assign(await API.getShipment(tx, { shipmentId: id }), { completed });
+  },
+
+  // Count several shipments of one supplier together (same rules as one shipment, per shipment)
+  async getCountGroup(tx, { shipmentIds }) {
+    return countGroupOut(tx, await openCountGroup(tx, shipmentIds));
+  },
+
+  async countScanGroup(tx, { shipmentIds, upc }, ctx) {
+    const user = requireUser(ctx);
+    upc = cleanUpc(upc);
+    if (!upc) throw new UserError('Enter or scan a UPC.');
+    const group = await openCountGroup(tx, shipmentIds);
+    const matches = (await groupChecks(tx, group.open)).filter((c) => sameUpc(c.upc, upc));
+    if (!matches.length) {
+      const done = group.shipments.filter((s) => s.steps['4b']).map((s) => s.shipmentId);
+      for (const id of done) {
+        if ((await loadChecks(tx, id)).some((c) => sameUpc(c.upc, upc))) {
+          throw new UserError(`${upc}: the 4b count of its shipment is already complete.`, 'NOT_ON_LIST');
+        }
+      }
+      throw new UserError(`This UPC is not on the Renfrew list: ${upc}`, 'NOT_ON_LIST');
+    }
+    // Oldest shipment first: fill it up to the expected qty, extra goes to the last one
+    const target = matches.find((c) => Number(c.counted_qty) < Number(c.expected_qty)) || matches[matches.length - 1];
+    await tx.query('update trk.renfrew_checks set counted_qty = counted_qty + 1 where shipment_id = $1 and line_id = $2', [target.shipment_id, target.line_id]);
+    const completed = await autoCompleteCount(tx, target.shipment_id, user);
+    return Object.assign(await countGroupOut(tx, await openCountGroup(tx, shipmentIds)), {
+      scanned: { key: itemKey(target), shipmentId: target.shipment_id, productName: target.product_name || '' },
+      completed: completed ? [target.shipment_id] : []
+    });
+  },
+
+  // counts: [{ key, counted }] with the total for the item across the open shipments
+  async setCountsGroup(tx, { shipmentIds, counts }, ctx) {
+    const user = requireUser(ctx);
+    const group = await openCountGroup(tx, shipmentIds);
+    const checks = await groupChecks(tx, group.open);
+    const touched = new Set();
+    for (const c of Array.isArray(counts) ? counts : []) {
+      const lines = checks.filter((x) => itemKey(x) === String(c.key));
+      if (!lines.length) throw new UserError('This item is not on the Renfrew list.');
+      const total = wholeNumber(c.counted, 'Counted qty');
+      const put = lines.reduce((n, x) => n + Number(x.put_qty), 0);
+      if (total < put) {
+        throw new UserError(`${lines[0].product_name || lines[0].upc}: ${put} already put away, so the count cannot be lower than that.`);
+      }
+      // Each line keeps at least what was put away; the rest fills the oldest shipment first
+      const alloc = lines.map((x) => Number(x.put_qty));
+      let rest = total - put;
+      lines.forEach((x, i) => {
+        const add = Math.min(rest, Math.max(0, Number(x.expected_qty) - alloc[i]));
+        alloc[i] += add; rest -= add;
+      });
+      alloc[alloc.length - 1] += rest;
+      for (let i = 0; i < lines.length; i++) {
+        if (alloc[i] === Number(lines[i].counted_qty)) continue;
+        await tx.query('update trk.renfrew_checks set counted_qty = $3::int where shipment_id = $1 and line_id = $2',
+          [lines[i].shipment_id, lines[i].line_id, alloc[i]]);
+        touched.add(lines[i].shipment_id);
+      }
+    }
+    const completed = [];
+    for (const id of touched) if (await autoCompleteCount(tx, id, user)) completed.push(id);
+    return Object.assign(await countGroupOut(tx, await openCountGroup(tx, shipmentIds)), { completed });
+  },
+
+  // Complete 4b on every open shipment of the group; one note is saved on each shipment that does not match
+  async completeCountGroup(tx, { shipmentIds, note }, ctx) {
+    requireUser(ctx);
+    const group = await openCountGroup(tx, shipmentIds);
+    note = cleanText(note, 500);
+    const checks = await groupChecks(tx, group.open);
+    const short = group.open.filter((s) => checks.some((c) => c.shipment_id === s.shipmentId && Number(c.counted_qty) !== Number(c.expected_qty)));
+    if (short.length && !note) {
+      throw new UserError(`${short.map((s) => s.name).join(', ')}: quantities do not match the expected qty. Please add a note.`, 'NEED_NOTE');
+    }
+    for (const s of group.open) {
+      const mismatch = short.includes(s);
+      await API.completeStep(tx, { shipmentId: s.shipmentId, step: '4b', note: mismatch ? note : '' }, ctx);
+    }
+    return Object.assign(await countGroupOut(tx, await openCountGroup(tx, shipmentIds)), { completed: group.open.map((s) => s.shipmentId) });
   },
 
   async completeStep(tx, { shipmentId, step, password, note, force }, ctx) {
