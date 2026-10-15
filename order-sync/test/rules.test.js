@@ -393,3 +393,45 @@ test('POPW：控制台有原單資料時直接用（原單超過 60 天也可以
   assert.deepEqual([r.values.L, r.values.N], [17.49, 0.9]);
   assert.ok(!p.warnings.some((w) => /讀不到原單/.test(w)));
 });
+
+// ---- POPW 出貨單裡另外加了現貨 ----
+
+test('POPW 出貨單加了現貨：現貨用出貨單單號記錄（運費、手續費記在現貨），POPW 那一列 L、O 是 0、M 灰色', () => {
+  const ctx = ctxWith({ preorders: { CA42485D: { row: 5, B: '', C: '2026-03-02', D: 'Niformation', I: 1, L: 1, M: 149.99, N: 149.99, Nvalue: 149.99 } } });
+  const p = planOrder(draft({ name: 'CA52878D', shippingCharged: 14.99, payments: [{ createdAt: 'x', gateway: 'shopify_payments', amount: 172, fee: 4.85 }],
+    lines: [popwLine('CA42485D', 'Niformation', '1', 0), line('Mega Cat Project One Piece Nyan Pie', 139.99, { sku: '4535123848902' })] }), ctx);
+  assert.deepEqual(p.errors, []);
+  const rows = ops(p, 'appendShipped');
+  assert.deepEqual(rows.map((r) => r.values.A), ['CA52878D', 'CA42485D']);
+  assert.deepEqual([rows[0].values.C, rows[0].values.K, rows[0].values.L, rows[0].values.N], ['Shopify', 139.99, 14.99, 4.85]);
+  assert.deepEqual([rows[1].values.L, rows[1].values.O, rows[1].values.M, rows[1].colors.M], [0, 0, 0, '#cccccc']);
+});
+
+test('POPW 出貨單只有 POPW 商品：出貨單單號本身不記錄', () => {
+  const ctx = ctxWith({ preorders: { CA1D: { row: 5, B: '', C: '2026-03-01', D: 'X', I: 1, L: 1, M: 100, N: 100, Nvalue: 100 } } });
+  const p = planOrder(draft({ name: 'CA52999D', lines: [popwLine('CA1D', 'X', '1', 0)] }), ctx);
+  assert.ok(!ops(p, 'appendShipped').some((r) => r.values.A === 'CA52999D'));
+});
+
+test('POPW：商品名稱用空格隔開（「CA39736D 品名」）也認得', () => {
+  const ctx = ctxWith({ preorders: { CA39736D: { row: 5, B: '', C: '2025-11-01', D: 'Tamaki', I: 1, L: 1, M: 79.99, N: 16, Nvalue: 16 } } });
+  const p = planOrder(draft({ lines: [line('CA39736D Nendoroid No.2104 Tamaki Suou', 63.99, { sku: '' }), line('Private Warehouse Storage Fee', 2, { sku: '', requiresShipping: false })] }), ctx);
+  assert.deepEqual(p.errors, []);
+  const r = ops(p, 'appendShipped')[0];
+  assert.deepEqual([r.values.A, r.values.L], ['CA39736D', 16.99]);
+  assert.equal(ops(p, 'updatePreorder')[0].paidAfter, 79.99);
+});
+
+test('「Prepaid Duties (US)」不記錄', () => {
+  const ctx = ctxWith({ preorders: { CA47611D: { row: 5, B: '', C: '2026-06-21', D: 'Rapi', I: 1, L: 1, M: 309.99, N: 309.99, Nvalue: 309.99 } } });
+  const p = planOrder(draft({ shippingCharged: 24.99, lines: [popwLine('CA47611D', 'Rapi', '1', 0), line('Prepaid Duties (US)', 31, { sku: '', requiresShipping: false })] }), ctx);
+  assert.deepEqual(ops(p, 'appendShipped').map((r) => [r.values.A, r.values.L]), [['CA47611D', 24.99]]);
+});
+
+test('POPW：PW／現貨商品自取出貨，沒有運費也沒有手續費 → 原本那一列不用改，算已登記（CA52841D）', () => {
+  const ctx = ctxWith({ shipped: { CA50480D: { file: 'main', tab: '2026已出貨 CA', row: 8498, L: 0, O: 0 } } });
+  const p = planOrder(draft({ name: 'CA52841D', shippingTitle: 'Vancouver (Renfrew)', shippingCharged: 0, payments: [],
+    lines: [popwLine('CA50480D', 'HG 1/100 YF-19 WATER DECALS', '4573102642592', 0)] }), ctx);
+  assert.equal(classifyPlan(p), 'done');
+  assert.equal(ops(p, 'updateShipped').length, 0);
+});
