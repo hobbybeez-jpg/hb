@@ -303,10 +303,11 @@ function planNewOrder(order, facts, ctx, plan) {
     seenUpc[key] = true;
     var m = RULES_RE.deadline.exec(String(line.description || '').replace(/<[^>]+>/g, ' '));
     var deadline = m ? m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2) : '';
-    if (!deadline && !isBackorder) plan.warnings.push('「' + rulesCleanName(line.name) + '」的商品敘述找不到 Pre-Order Deadline，如果要新增到訂貨表，C 欄會留空。');
     plan.actions.push({
       op: 'ensureOrdering', key: key, label: '訂貨（UPC 不存在才新增）',
-      values: { A: rulesCleanName(line.name), B: rulesUpcCell(upc), C: deadline }
+      values: { A: rulesCleanName(line.name), B: rulesUpcCell(upc), C: deadline },
+      // 只有真的要新增到訂貨表時才提醒（Sheets.resolve 判斷）
+      missingDeadline: !deadline && !isBackorder ? '「' + rulesCleanName(line.name) + '」要新增到訂貨表，但商品敘述找不到 Pre-Order Deadline，C 欄會留空。' : ''
     });
   });
 }
@@ -420,6 +421,23 @@ function planPopw(order, facts, ctx, plan, options) {
   });
 }
 
+// 批次清單用：這張單目前的狀態
+//   done：要新增的列都已經在試算表裡（已登記）
+//   partial：有些已登記、有些沒有，要人工處理
+//   error：有錯誤；warn：有警告要人確認；ready：可以直接寫；nothing：沒有要記錄的東西
+function classifyPlan(plan) {
+  var dups = plan.duplicates || [];
+  var appends = plan.actions.filter(function (a) { return /^append/.test(a.op); });
+  if (dups.length) {
+    var others = plan.errors.length - dups.length;
+    return dups.length >= appends.length && others === 0 ? 'done' : 'partial';
+  }
+  if (plan.errors.length) return 'error';
+  if (!plan.actions.some(function (a) { return !a.skip; })) return 'nothing';
+  if (plan.warnings.length) return 'warn';
+  return 'ready';
+}
+
 function rulesFindOriginalLine(of, code, pre) {
   var upc = rulesUpcKey(pre && pre.I);
   var byCode = of.counted.filter(function (l) { return l.code === code; })[0];
@@ -435,6 +453,6 @@ if (typeof module !== 'undefined') {
   module.exports = {
     RULES_COLORS: RULES_COLORS, RULES_RE: RULES_RE, planOrder: planOrder, classifyLine: classifyLine,
     rulesOrderFacts: rulesOrderFacts, rulesAllocate: rulesAllocate, rulesCleanName: rulesCleanName,
-    rulesUpcKey: rulesUpcKey, rulesRound2: rulesRound2, rulesFeeInfo: rulesFeeInfo
+    rulesUpcKey: rulesUpcKey, rulesRound2: rulesRound2, rulesFeeInfo: rulesFeeInfo, classifyPlan: classifyPlan
   };
 }

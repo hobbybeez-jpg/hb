@@ -188,6 +188,32 @@ SheetsSession.prototype.context = function (order) {
   };
 };
 
+SheetsSession.prototype.duplicate = function (plan, a, where, row) {
+  plan.duplicates = plan.duplicates || [];
+  plan.duplicates.push(a.key);
+  plan.errors.push(a.key + ' 已經記錄在「' + where.replace(/^「|」$/g, '') + '」第 ' + row + ' 列。');
+};
+
+// 批次寫入時，一張單沒寫成就把預留的列號還回去，下一張單才不會空出列
+SheetsSession.prototype.saveRows = function () { return JSON.parse(JSON.stringify(this.nextRows)); };
+SheetsSession.prototype.restoreRows = function (saved) { this.nextRows = saved; };
+
+// 寫入後更新快取，同一批後面的單才看得到（避免重複、訂貨表同一個 UPC 新增兩次）
+SheetsSession.prototype.remember = function (ref, row, values) {
+  var id = ref.sheet.getSheetId ? ref.sheet.getSheetId() : ref.sheet.getName();
+  var sheetKey = (ref.book.getId ? ref.book.getId() : '') + '|' + id;
+  var block = this.blocks && this.blocks[sheetKey];
+  Object.keys(values).forEach(function (letter) {
+    var col = SHEETS_COL[letter];
+    var arr = this.columns[sheetKey + '|' + col];
+    if (arr) { while (arr.length < row) arr.push(''); arr[row - 1] = values[letter]; }
+    if (block && col <= SHEETS_BLOCK_COLS) {
+      while (block.length < row) block.push(['', '', '', '', '', '']);
+      block[row - 1][col - 1] = values[letter];
+    }
+  }, this);
+};
+
 // 找出每個動作的目標分頁和列，檢查重複；結果寫在 action.target / action.skip，錯誤加到 plan.errors
 SheetsSession.prototype.resolve = function (plan) {
   var self = this;
@@ -198,17 +224,17 @@ SheetsSession.prototype.resolve = function (plan) {
         ref = self.shippedSheet(a.year, a.region);
         if (!ref) { plan.errors.push('找不到分頁「' + a.year + '已出貨 ' + a.region + '」（主檔和 YEAR_SHEET_' + a.year + ' 都沒有）。'); return; }
         dup = self.findRow(ref, a.key, 1);
-        if (dup) { plan.errors.push(a.key + ' 已經記錄在「' + ref.tab + '」第 ' + dup + ' 列。'); return; }
+        if (dup) { self.duplicate(plan, a, ref.tab, dup); return; }
         a.target = { file: ref.file, tab: ref.tab, row: self.nextRow(ref, [1, 2, 3, 4]) };
       } else if (a.op === 'appendPreorder') {
         ref = self.mainSheet(self.preorderTabName());
         dup = self.findRow(ref, a.key, 1);
-        if (dup) { plan.errors.push(a.key + ' 已經記錄在「預購」第 ' + dup + ' 列。'); return; }
+        if (dup) { self.duplicate(plan, a, '預購', dup); return; }
         a.target = { file: 'main', tab: ref.sheet.getName(), row: self.nextRow(ref, [1, 3, 4]) };
       } else if (a.op === 'appendPW') {
         ref = self.popwSheet();
         dup = self.findRow(ref, a.key, SHEETS_COL.E);
-        if (dup) { plan.errors.push(a.key + ' 已經記錄在 PW/PO「' + ref.sheet.getName() + '」第 ' + dup + ' 列。'); return; }
+        if (dup) { self.duplicate(plan, a, 'PW/PO「' + ref.sheet.getName() + '」', dup); return; }
         a.target = { file: 'popw', tab: ref.sheet.getName(), row: self.nextRow(ref, [SHEETS_COL.E, SHEETS_COL.F]) };
       } else if (a.op === 'ensureOrdering') {
         ref = self.mainSheet(self.orderingTabName());
@@ -217,6 +243,7 @@ SheetsSession.prototype.resolve = function (plan) {
           if (rulesUpcKey(col[i]) === a.key) { a.skip = true; a.skipReason = '訂貨表第 ' + (i + 1) + ' 列已有這個 UPC，不新增'; return; }
         }
         a.target = { file: 'main', tab: ref.sheet.getName(), row: self.nextRow(ref, [1, 2]) };
+        if (a.missingDeadline) plan.warnings.push(a.missingDeadline);
       } else if (a.op === 'updatePreorder') {
         ref = self.mainSheet(self.preorderTabName());
         a.target = { file: 'main', tab: ref.sheet.getName(), row: a.row };
@@ -312,6 +339,7 @@ SheetsSession.prototype.execute = function (plan) {
       sheetsMerge_(sheet, row, SHEETS_COL.D, 4);
       sheetsCopyNumberFormat_(sheet, row, [SHEETS_COL.B, SHEETS_COL.K, SHEETS_COL.L, SHEETS_COL.N, SHEETS_COL.O]);
       sheet.getRange(row, SHEETS_COL.M).setBackground((a.colors && a.colors.M) || settings.M_DEFAULT_COLOR || RULES_COLORS.yellow);
+      self.remember(ref, row, { A: a.values.A, B: a.values.B, C: a.values.C, D: a.values.D });
     } else if (a.op === 'appendPreorder') {
       sheetsEnsureRows_(sheet, row);
       var pv = Object.assign({}, a.values, { C: sheetsToDate_(a.values.C) });
@@ -323,18 +351,22 @@ SheetsSession.prototype.execute = function (plan) {
       if (a.deposit) sheet.getRange(row, SHEETS_COL.O).setFormula('=M' + row + '*L' + row + '-N' + row);
       else sheet.getRange(row, SHEETS_COL.O).setValue('---');
       if (a.colors && a.colors.B) sheet.getRange(row, SHEETS_COL.B).setBackground(a.colors.B);
+      self.remember(ref, row, { A: a.values.A, C: a.values.C, D: a.values.D });
+      if (self._pre) self._pre.values[row - 1] = [a.values.A, a.values.B, a.values.C, a.values.D, '', '', '', '', a.values.I, '', '', a.values.L, a.values.M, a.values.N, ''];
     } else if (a.op === 'appendPW') {
       sheetsEnsureRows_(sheet, row);
       sheetsSetValues_(sheet, row, Object.assign({}, a.values, { D: sheetsToDate_(a.values.D) }));
       sheetsCopyNumberFormat_(sheet, row, [SHEETS_COL.D]);
       [SHEETS_COL.H, SHEETS_COL.L, SHEETS_COL.M, SHEETS_COL.P, SHEETS_COL.Q].forEach(function (c) { sheetsCopyFormulaFromAbove_(sheet, row, c); });
       if (a.colors && a.colors.C) sheet.getRange(row, SHEETS_COL.C).setBackground(a.colors.C);
+      self.remember(ref, row, { E: a.values.E, F: a.values.F });
     } else if (a.op === 'ensureOrdering') {
       sheetsEnsureRows_(sheet, row);
       sheetsSetValues_(sheet, row, Object.assign({}, a.values, { C: a.values.C ? sheetsToDate_(a.values.C) : '' }));
       sheetsCopyNumberFormat_(sheet, row, [SHEETS_COL.C]);
       sheetsCopyFormulaFromAbove_(sheet, row, SHEETS_COL.D);
       sheetsCopyFormulaFromAbove_(sheet, row, SHEETS_COL.E);
+      self.remember(ref, row, { A: a.values.A, B: a.values.B });
     } else if (a.op === 'updatePreorder') {
       var found = self.findRow(ref, a.key, 1);
       if (found !== row) throw new Error(a.key + '：預購表的列號變了（原本第 ' + row + ' 列），請重新預覽。');
@@ -345,6 +377,11 @@ SheetsSession.prototype.execute = function (plan) {
         if (typeof f === 'string') nCell.setFormula(f); else nCell.setValue(f);
       }
       sheet.getRange(row, 1, 1, 15).setBackground(a.rowColor);
+      if (self._pre && self._pre.values[row - 1]) {
+        self._pre.values[row - 1][1] = 'Y';
+        self._pre.values[row - 1][13] = a.paidAfter;
+        self._pre.nFormulas[row - 1] = [''];
+      }
     } else if (a.op === 'updateShipped') {
       var check = self.findRow(ref, a.key, 1);
       if (check !== row) throw new Error(a.key + '：已出貨表的列號變了（原本第 ' + row + ' 列），請重新預覽。');

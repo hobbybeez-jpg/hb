@@ -283,3 +283,17 @@ test('POPW：自取 → M=0 青色；Duties 不記', () => {
   const r = ops(p, 'appendShipped')[0];
   assert.deepEqual([r.values.L, r.values.M, r.colors.M], [0, 0, CYAN]);
 });
+
+// ---- 批次清單的狀態 ----
+const { classifyPlan } = require('../src/Rules.js');
+
+test('classifyPlan：已登記／部分已登記／錯誤／需確認／可寫入／不用記錄', () => {
+  const a = (op) => ({ op });
+  assert.equal(classifyPlan({ actions: [a('appendShipped'), a('appendShipped')], errors: ['d1', 'd2'], warnings: [], duplicates: ['x-1', 'x-2'] }), 'done');
+  assert.equal(classifyPlan({ actions: [a('appendShipped'), a('appendPreorder')], errors: ['d1'], warnings: [], duplicates: ['x-1'] }), 'partial');
+  assert.equal(classifyPlan({ actions: [a('appendShipped')], errors: ['d1', 'other'], warnings: [], duplicates: ['x'] }), 'partial');
+  assert.equal(classifyPlan({ actions: [], errors: ['INT 還沒付清'], warnings: [] }), 'error');
+  assert.equal(classifyPlan({ actions: [a('appendShipped')], errors: [], warnings: ['w'] }), 'warn');
+  assert.equal(classifyPlan({ actions: [a('appendShipped')], errors: [], warnings: [] }), 'ready');
+  assert.equal(classifyPlan({ actions: [{ op: 'ensureOrdering', skip: true }], errors: [], warnings: [] }), 'nothing');
+});

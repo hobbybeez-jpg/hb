@@ -34,11 +34,26 @@
   .footer { position: fixed; bottom: 0; left: 250px; right: 0; background: #fff; border-top: 1px solid #dadce0; padding: 10px 16px; display: flex; gap: 12px; align-items: center; }
   .muted { color: #5f6368; }
   .kind { font-size: 11px; padding: 1px 5px; border-radius: 3px; background: #e8f0fe; color: #174ea6; }
+  .box { border: 1px solid #dadce0; border-radius: 6px; padding: 8px; margin-bottom: 10px; }
+  .box label { display: block; margin: 6px 0; font-size: 12px; color: #5f6368; }
+  .box input[type=date] { width: 100%; box-sizing: border-box; padding: 4px; font-size: 13px; }
+  .badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; white-space: nowrap; }
+  .badge.ok { background: #e6f4ea; color: #0d652d; }
+  .badge.warn { background: #fef7e0; color: #7a4f01; }
+  .badge.err { background: #fce8e6; color: #a50e0e; }
+  .badge.note { background: #f1f3f4; color: #5f6368; }
+  .linkbtn { padding: 2px 8px; font-size: 12px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="side">
+    <div class="box">
+      <b>找未登記的訂單</b>
+      <label>從 <input type="date" id="from"></label>
+      <label>到 <input type="date" id="to"></label>
+      <button class="primary" onclick="scan()" style="width:100%">掃描</button>
+    </div>
     <button onclick="loadRecent()" style="width:100%">最近 25 張訂單</button>
     <div id="recent" class="recent" style="margin-top:8px"></div>
   </div>
@@ -53,10 +68,16 @@
 <div class="footer">
   <label id="ackWrap" style="display:none"><input type="checkbox" id="ack" onchange="updateWrite()"> 我已確認上面的警告</label>
   <button class="primary" id="writeBtn" disabled onclick="submitWrite()">寫入</button>
+  <button class="primary" id="batchBtn" disabled style="display:none" onclick="submitBatch()">寫入勾選的單</button>
   <span id="status" class="muted"></span>
 </div>
 <script>
 var current = null;
+var batch = null;
+var STATUS = {
+  ready: ['可寫入', 'ok'], warn: ['需確認', 'warn'], error: ['錯誤', 'err'], partial: ['部分已登記', 'err'],
+  done: ['已登記', 'note'], nothing: ['不用記錄', 'note'], skip: ['略過', 'note'], written: ['已寫入', 'ok'], failed: ['寫入失敗', 'err']
+};
 var KIND = { stock: '現貨', preorder: '預購', backorder: 'backorder', service: '服務費/運費', skip: '不記錄', popw: 'POPW 出貨', removed: '已移除' };
 var OPS = {
   appendShipped: '新增一列', appendPreorder: '新增一列', appendPW: '新增一列', ensureOrdering: '新增一列（UPC 不存在時）',
@@ -84,7 +105,7 @@ function pick(name) { document.getElementById('name').value = name; preview(); }
 function preview() {
   var name = document.getElementById('name').value.trim();
   if (!name) return;
-  current = null; updateWrite();
+  current = null; setMode('single'); updateWrite();
   document.getElementById('out').innerHTML = '<span class="muted">讀取 ' + esc(name) + '…</span>';
   setStatus('');
   google.script.run.withSuccessHandler(render).withFailureHandler(function (e) {
@@ -95,6 +116,8 @@ function preview() {
 function render(res) {
   current = res;
   var o = res.order, p = res.plan, h = [];
+  setMode('single');
+  if (batch) h.push('<a href="#" onclick="backToBatch();return false;">← 回到批次清單</a>');
   h.push('<h3>' + esc(o.name) + '　' + esc(o.date) + '　<span class="muted">' + esc(o.source) + '・' + esc(o.status) +
     '・' + esc(o.shippingTitle || '沒有運送方式') + (o.country ? '・' + esc(o.country) : '') + '・運費 $' + money(o.shippingCharged) + '</span></h3>');
   h.push('<div class="muted">判斷：' + esc(p.summary) + '</div>');
@@ -165,13 +188,144 @@ function submitWrite() {
     if (!r.ok) { setStatus(''); alert(r.message); if (r.changed) preview(); else updateWrite(); return; }
     current = null; updateWrite();
     setStatus('');
-    var h = ['<div class="msg ok">' + esc(name) + ' 已寫入' + (r.emailed ? '，並已寄信通知' : '') + '：</div><ul>'];
+    markBatch(name, { ok: true, written: r.written, emailed: r.emailed });
+    var h = [(batch ? '<a href="#" onclick="backToBatch();return false;">← 回到批次清單</a>' : '') +
+      '<div class="msg ok">' + esc(name) + ' 已寫入' + (r.emailed ? '，並已寄信通知' : '') + '：</div><ul>'];
     r.written.forEach(function (w) { h.push('<li>' + esc(w.label) + ' ' + esc(w.key) + ' → <a href="' + esc(w.url) + '" target="_blank">' + esc(w.tab) + ' 第 ' + w.row + ' 列</a></li>'); });
     h.push('</ul>');
     document.getElementById('out').innerHTML = h.join('');
     document.getElementById('ackWrap').style.display = 'none';
   }).withFailureHandler(function (e) { setStatus(''); alert(e.message); updateWrite(); }).apiWrite(name, current.fingerprint);
 }
+
+// ---- 批次 ----
+
+function ymd(d) { return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+
+function setMode(m) {
+  document.getElementById('writeBtn').style.display = m === 'single' ? '' : 'none';
+  document.getElementById('batchBtn').style.display = m === 'batch' ? '' : 'none';
+  if (m === 'batch') document.getElementById('ackWrap').style.display = 'none';
+}
+
+function scan() {
+  var from = document.getElementById('from').value, to = document.getElementById('to').value;
+  if (!from || !to) { alert('請選擇日期範圍'); return; }
+  batch = { from: from, to: to, items: [], checked: {}, showAll: false, busy: true, total: 0 };
+  current = null; updateWrite();
+  setMode('batch');
+  renderBatch();
+  scanNext(0);
+}
+
+function scanNext(start) {
+  google.script.run.withSuccessHandler(function (r) {
+    batch.total = r.total;
+    r.items.forEach(function (it) { batch.items.push(it); if (it.status === 'ready') batch.checked[it.name] = true; });
+    if (r.next !== null && r.next !== undefined) { renderBatch(); scanNext(r.next); return; }
+    batch.busy = false;
+    renderBatch();
+  }).withFailureHandler(function (e) { batch.busy = false; batch.error = e.message; renderBatch(); }).apiScan(batch.from, batch.to, start);
+}
+
+function findItem(name) { return batch && batch.items.filter(function (x) { return x.name === name; })[0]; }
+
+function renderBatch() {
+  if (!batch) return;
+  var counts = {};
+  batch.items.forEach(function (it) { counts[it.status] = (counts[it.status] || 0) + 1; });
+  var h = ['<h3>' + esc(batch.from) + ' ～ ' + esc(batch.to) + '　共 ' + batch.total + ' 張訂單' +
+    (batch.busy ? '　<span class="muted">掃描中… ' + batch.items.length + ' / ' + (batch.total || '?') + '</span>' : '') + '</h3>'];
+  if (batch.error) h.push('<div class="msg err">' + esc(batch.error) + '</div>');
+  h.push('<div>' + Object.keys(STATUS).filter(function (k) { return counts[k]; }).map(function (k) {
+    return '<span class="badge ' + STATUS[k][1] + '">' + STATUS[k][0] + ' ' + counts[k] + '</span>';
+  }).join(' ') + '　<label class="muted"><input type="checkbox" ' + (batch.showAll ? 'checked ' : '') +
+    'onchange="toggleShowAll(this)"> 顯示已登記／略過的單</label></div>');
+  h.push('<div class="muted" style="margin:6px 0">預設只勾「可寫入」。「需確認」請先按「檢視」看過警告再勾。寫入會照訂單時間先後。</div>');
+  h.push('<table><tr><th></th><th>單號</th><th>時間</th><th>判斷</th><th>狀態</th><th>說明</th><th></th></tr>');
+  batch.items.forEach(function (it) {
+    var hidden = !batch.showAll && /^(done|nothing|skip)$/.test(it.status);
+    if (hidden) return;
+    var can = it.status === 'ready' || it.status === 'warn';
+    var st = STATUS[it.status] || [it.status, 'note'];
+    var note = it.status === 'written'
+      ? (it.written || []).map(function (w) { return '<a href="' + esc(w.url) + '" target="_blank">' + esc(w.tab) + ' 第 ' + w.row + ' 列</a>'; }).join('、') + (it.emailed ? '（已寄信）' : '')
+      : esc(it.note || '');
+    h.push('<tr><td>' + (can ? '<input type="checkbox" data-name="' + esc(it.name) + '" ' + (batch.checked[it.name] ? 'checked ' : '') + 'onchange="toggleItem(this)">' : '') +
+      '</td><td>' + esc(it.name) + '</td><td>' + esc(String(it.createdAt).slice(5, 16).replace('T', ' ')) + '</td><td>' + esc(it.summary || '') +
+      '</td><td><span class="badge ' + st[1] + '">' + st[0] + '</span></td><td>' + note + '</td><td>' +
+      (it.preview ? '<button class="linkbtn" onclick="viewItem(\'' + esc(it.name) + '\')">檢視</button>' : '') + '</td></tr>');
+  });
+  h.push('</table>');
+  document.getElementById('out').innerHTML = h.join('');
+  updateBatchBtn();
+}
+
+function toggleShowAll(el) { batch.showAll = el.checked; renderBatch(); }
+function toggleItem(el) { batch.checked[el.getAttribute('data-name')] = el.checked; updateBatchBtn(); }
+
+function checkedItems() {
+  return batch ? batch.items.filter(function (it) { return batch.checked[it.name] && (it.status === 'ready' || it.status === 'warn'); }) : [];
+}
+
+function updateBatchBtn() {
+  var n = checkedItems().length;
+  var btn = document.getElementById('batchBtn');
+  btn.textContent = '寫入勾選的 ' + n + ' 張';
+  btn.disabled = !n || batch.busy || batch.writing;
+}
+
+function viewItem(name) {
+  var it = findItem(name);
+  if (it && it.preview) { current = null; render(it.preview); }
+}
+
+function backToBatch() { current = null; updateWrite(); setMode('batch'); renderBatch(); }
+
+function markBatch(name, res) {
+  var it = findItem(name);
+  if (!it) return;
+  it.status = res.ok ? 'written' : 'failed';
+  it.note = res.ok ? '' : res.message;
+  it.written = res.written || [];
+  it.emailed = !!res.emailed;
+  batch.checked[name] = false;
+}
+
+function submitBatch() {
+  var list = checkedItems();
+  if (!list.length) return;
+  var warned = list.filter(function (it) { return it.status === 'warn'; }).length;
+  if (warned && !confirm('勾選的單裡有 ' + warned + ' 張有警告，確定都檢查過了嗎？')) return;
+  batch.writing = true;
+  updateBatchBtn();
+  var payload = list.map(function (it) { return { name: it.name, fingerprint: it.fingerprint }; });
+  writeNext(payload, 0);
+}
+
+function writeNext(payload, start) {
+  setStatus('寫入中… ' + start + ' / ' + payload.length);
+  google.script.run.withSuccessHandler(function (r) {
+    r.results.forEach(function (res) { markBatch(res.name, res); });
+    renderBatch();
+    if (r.next !== null && r.next !== undefined) { writeNext(payload, r.next); return; }
+    batch.writing = false;
+    var ok = batch.items.filter(function (it) { return it.status === 'written'; }).length;
+    var bad = r.results.filter(function (x) { return !x.ok; }).length;
+    setStatus('完成。' + (bad ? '有 ' + bad + ' 張沒寫入，請看說明欄。' : ''));
+    if (r.stopped) alert('有一張單寫到一半出錯，已停止。請看「紀錄」分頁和試算表，必要時手動修正。');
+    updateBatchBtn();
+  }).withFailureHandler(function (e) {
+    batch.writing = false; setStatus(''); alert('寫入失敗：' + e.message); renderBatch();
+  }).apiWriteBatch(payload, start);
+}
+
+(function () {
+  var today = new Date(), from = new Date();
+  from.setDate(today.getDate() - 2);
+  document.getElementById('from').value = ymd(from);
+  document.getElementById('to').value = ymd(today);
+})();
 
 loadRecent();
 </script>

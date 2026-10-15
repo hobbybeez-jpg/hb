@@ -169,3 +169,66 @@ test('N 欄公式', () => {
   assert.equal(sheetsNewPaidFormula_('=20+10', 5), '=20+10+5');
   assert.equal(sheetsNewPaidFormula_('', 5), 5);
 });
+
+// ---- 批次：同一個 session 連續寫好幾張單 ----
+
+test('批次：連續寫入的列不重疊、不空列；同一批第二張單看得到第一張剛寫的資料', () => {
+  const { ca, pre, ordering, settings } = setup();
+  const session = new SheetsSession(settings, () => null);
+  const planFor = (order) => {
+    const plan = Rules.planOrder(order, session.context(order), {});
+    if (!plan.errors.length) session.resolve(plan);
+    return plan;
+  };
+  // 第一張：現貨兩件 → 第 4、5 列
+  const p1 = planFor(baseOrder({ name: 'CA60001D', lines: [L('A', 10), L('B', 20)] }));
+  session.execute(p1);
+  // 第二張：有錯（找不到原單）→ 不寫，預留的列要還回去
+  const saved = session.saveRows();
+  const p2 = planFor(baseOrder({ name: 'CA60002D', source: 'shopify_draft_order', lines: [L('CA999D\tX\t(1)\t2026-10-01', 0, { sku: '' })] }));
+  assert.ok(p2.errors.length);
+  session.restoreRows(saved);
+  // 第三張：現貨一件 → 接在第 6 列
+  const p3 = planFor(baseOrder({ name: 'CA60003D', lines: [L('C', 30)] }));
+  assert.equal(p3.actions[0].target.row, 6);
+  session.execute(p3);
+  assert.equal(ca.get('A6').v, 'CA60003D');
+  // 第四張：重複第一張 → 已登記
+  const p4 = planFor(baseOrder({ name: 'CA60001D', lines: [L('A', 10), L('B', 20)] }));
+  assert.equal(Rules.classifyPlan(p4), 'done');
+  // 兩張預購單同一個新 UPC：訂貨表只新增一次
+  const preLine = () => L('Brand New - Pay in full', 50, { sku: '4999999999999', requiresShipping: false });
+  const p5 = planFor(baseOrder({ name: 'CA60005D', shippingCharged: 0, lines: [preLine()] }));
+  session.execute(p5);
+  const p6 = planFor(baseOrder({ name: 'CA60006D', shippingCharged: 0, lines: [preLine()] }));
+  assert.equal(p6.actions.find((a) => a.op === 'ensureOrdering').skip, true);
+  session.execute(p6);
+  assert.equal(pre.get('A5').v, 'CA60005D');
+  assert.equal(pre.get('A6').v, 'CA60006D');
+  assert.equal(ordering.get('B4').v, 4999999999999);
+  assert.equal(ordering.get('A5').v, undefined);
+});
+
+test('批次：同一批裡 POPW 更新過的預購列，之後的單讀到的是新的 B／N', () => {
+  const { settings } = setup();
+  const session = new SheetsSession(settings, () => null);
+  const order = baseOrder({ name: 'CA60010D', source: 'shopify_draft_order', lines: [L('CA46701D\tRocketboy Platea\t(4573343560693)\t2026-09-23', 287.99, { sku: '' })] });
+  const p1 = Rules.planOrder(order, session.context(order), {});
+  session.resolve(p1);
+  session.execute(p1);
+  const again = session.context(order).findPreorder('CA46701D');
+  assert.equal(again.B, 'Y');
+  assert.equal(again.Nvalue, 359.99);
+  const p2 = Rules.planOrder(baseOrder({ name: 'CA60011D', source: 'shopify_draft_order', lines: order.lines }), session.context(order), {});
+  session.resolve(p2);
+  assert.equal(Rules.classifyPlan(p2), 'done');
+});
+
+test('訂貨表已有這個 UPC 時，不會因為找不到 Pre-Order Deadline 而警告；要新增時才警告', () => {
+  const { settings } = setup();
+  const run1 = run(baseOrder({ shippingCharged: 0, lines: [L('DIGIVICE - Pay a 20% non-refundable deposit', 12, { sku: '045557611514', requiresShipping: false })] }), settings);
+  assert.deepEqual(run1.plan.warnings, []);
+  assert.equal(Rules.classifyPlan(run1.plan), 'ready');
+  const run2 = run(baseOrder({ shippingCharged: 0, lines: [L('Brand New - Pay in full', 50, { sku: '4999999999999', requiresShipping: false })] }), settings);
+  assert.match(run2.plan.warnings.join(), /Pre-Order Deadline/);
+});

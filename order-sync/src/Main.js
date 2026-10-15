@@ -22,7 +22,7 @@ var SETTINGS_DEFAULTS = [
 
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('訂單自動化')
-    .addItem('開啟逐筆處理', 'openReviewDialog')
+    .addItem('開啟逐筆／批次處理', 'openReviewDialog')
     .addSeparator()
     .addItem('設定 Shopify 金鑰', 'promptShopifySecrets')
     .addItem('測試 Shopify 連線（看一張訂單的原始資料）', 'testShopifyConnection')
@@ -49,11 +49,14 @@ function setupTabs() {
   SpreadsheetApp.getUi().alert('「設定」和「紀錄」分頁已建立。請在「設定」填好試算表 ID，再用選單「設定 Shopify 金鑰」。');
 }
 
+var SETTINGS_MEMO_ = null;
+
 function getSettings() {
+  if (SETTINGS_MEMO_) return SETTINGS_MEMO_;
   var out = {};
   SETTINGS_DEFAULTS.forEach(function (d) { out[d[0]] = d[1]; });
   var s = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SETTINGS_TAB);
-  if (!s || s.getLastRow() < 2) return out;
+  if (!s || s.getLastRow() < 2) { SETTINGS_MEMO_ = out; return out; }
   var tz = Session.getScriptTimeZone();
   s.getRange(2, 1, s.getLastRow() - 1, 2).getValues().forEach(function (r) {
     var key = String(r[0] || '').trim();
@@ -71,6 +74,7 @@ function getSettings() {
       if (m) out[k] = m[1];
     }
   });
+  SETTINGS_MEMO_ = out;
   return out;
 }
 
@@ -110,66 +114,162 @@ function testShopifyConnection() {
 
 function openReviewDialog() {
   var html = HtmlService.createHtmlOutputFromFile('Dialog').setWidth(1150).setHeight(760);
-  SpreadsheetApp.getUi().showModelessDialog(html, '訂單逐筆處理');
+  SpreadsheetApp.getUi().showModelessDialog(html, '訂單逐筆／批次處理');
 }
 
 // ---- 給 Dialog.html 呼叫的函式 ----
 
-function buildPlan_(orderName) {
+function newSession_() {
+  return new SheetsSession(getSettings(), function (base) { return shopifyFetchOrder(base); });
+}
+
+function planFor_(order, session) {
   var settings = getSettings();
-  var order = shopifyFetchOrder(orderName);
-  if (!order) throw new Error('Shopify 找不到單號 ' + orderName);
-  var session = new SheetsSession(settings, function (base) { return shopifyFetchOrder(base); });
   var plan = planOrder(order, session.context(order), { numbering: settings.NUMBERING || 'stockFirst' });
   if (order.test) plan.errors.push('這是測試訂單（test order），不處理。');
   if (!plan.errors.length) session.resolve(plan);
   var prior = logEntriesFor_(order.name);
   if (prior.length) plan.warnings.unshift('「紀錄」分頁顯示這張單在 ' + prior.join('、') + ' 寫入過。');
-  return { order: order, plan: plan, session: session };
+  plan.status = classifyPlan(plan);
+  return plan;
+}
+
+function buildPlan_(orderName, session) {
+  var order = shopifyFetchOrder(orderName);
+  if (!order) throw new Error('Shopify 找不到單號 ' + orderName);
+  session = session || newSession_();
+  return { order: order, plan: planFor_(order, session), session: session };
 }
 
 function fingerprint_(plan) {
   var core = plan.actions.map(function (a) {
-    return [a.op, a.key, a.values, a.set, a.addPaid, a.rowColor, a.skip ? 1 : 0, a.colors];
+    // 訂貨表：同一批前面的單剛新增過同一個 UPC 時會變成「不新增」，這是正常的，不算內容有變
+    var skip = a.op === 'ensureOrdering' ? 0 : (a.skip ? 1 : 0);
+    return [a.op, a.key, a.values, a.set, a.addPaid, a.rowColor, skip, a.colors];
   });
   var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(core), Utilities.Charset.UTF_8);
   return Utilities.base64Encode(bytes);
 }
 
-function apiPreview(orderName) {
-  var built = buildPlan_(orderName);
+function previewPayload_(order, plan) {
   return {
     order: {
-      name: built.order.name, date: built.order.date, source: built.order.source, status: built.order.financialStatus,
-      shippingTitle: built.order.shippingTitle, shippingCharged: built.order.shippingCharged, country: built.order.country,
-      lines: built.order.lines.map(function (l) { return { name: l.name, qty: l.qty, unitPrice: l.unitPrice, discount: l.discount, sku: l.sku, barcode: l.barcode, kind: classifyLine(l, built.order) }; }),
-      payments: built.order.payments
+      name: order.name, date: order.date, source: order.source, status: order.financialStatus,
+      shippingTitle: order.shippingTitle, shippingCharged: order.shippingCharged, country: order.country,
+      lines: order.lines.map(function (l) { return { name: l.name, qty: l.qty, unitPrice: l.unitPrice, discount: l.discount, sku: l.sku, barcode: l.barcode, kind: classifyLine(l, order) }; }),
+      payments: order.payments
     },
-    plan: built.plan,
-    fingerprint: fingerprint_(built.plan)
+    plan: plan,
+    fingerprint: fingerprint_(plan)
   };
+}
+
+function apiPreview(orderName) {
+  var built = buildPlan_(orderName);
+  return previewPayload_(built.order, built.plan);
+}
+
+// 寫入一張已經算好 plan 的單。partial＝寫到一半出錯（試算表可能有寫了一部分的列）
+function writePlan_(built, fingerprint) {
+  var plan = built.plan;
+  if (plan.errors.length) return { ok: false, message: '有錯誤，沒有寫入：\n' + plan.errors.join('\n') };
+  if (fingerprint_(plan) !== fingerprint) return { ok: false, changed: true, message: '訂單或試算表在預覽之後有變動，請重新預覽再寫入。' };
+  try {
+    var written = built.session.execute(plan);
+  } catch (e) {
+    try { appendLog_(plan, [], '失敗：' + e.message); } catch (ignore) {}
+    return { ok: false, partial: true, message: '寫入失敗：' + e.message + '\n（已寫入的部分請看「紀錄」分頁和試算表，必要時手動修正。）' };
+  }
+  var alerts = plan.actions.filter(function (a) { return a.op === 'updatePreorder' && a.diff !== 0; });
+  var settings = getSettings();
+  if (alerts.length && settings.ALERT_EMAIL) {
+    MailApp.sendEmail(settings.ALERT_EMAIL, '[預購] ' + plan.order + ' 應付和已付對不起來',
+      alerts.map(function (a) { return a.key + '：應付 $' + a.due + '，已付 $' + a.paidAfter + '，差 $' + a.diff + '（預購表第 ' + a.row + ' 列已標橘色）'; }).join('\n'));
+  }
+  appendLog_(plan, written, 'OK');
+  return { ok: true, written: written, emailed: alerts.length > 0 && !!settings.ALERT_EMAIL };
 }
 
 function apiWrite(orderName, fingerprint) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    var built = buildPlan_(orderName);
-    var plan = built.plan;
-    if (plan.errors.length) return { ok: false, message: '有錯誤，沒有寫入：\n' + plan.errors.join('\n') };
-    if (fingerprint_(plan) !== fingerprint) return { ok: false, changed: true, message: '訂單或試算表在預覽之後有變動，請重新預覽再寫入。' };
-    var written = built.session.execute(plan);
-    var alerts = plan.actions.filter(function (a) { return a.op === 'updatePreorder' && a.diff !== 0; });
-    var settings = getSettings();
-    if (alerts.length && settings.ALERT_EMAIL) {
-      MailApp.sendEmail(settings.ALERT_EMAIL, '[預購] ' + plan.order + ' 應付和已付對不起來',
-        alerts.map(function (a) { return a.key + '：應付 $' + a.due + '，已付 $' + a.paidAfter + '，差 $' + a.diff + '（預購表第 ' + a.row + ' 列已標橘色）'; }).join('\n'));
-    }
-    appendLog_(plan, written, 'OK');
-    return { ok: true, written: written, emailed: alerts.length > 0 && !!settings.ALERT_EMAIL };
+    return writePlan_(buildPlan_(orderName), fingerprint);
   } catch (e) {
-    try { appendLog_({ order: orderName, summary: '', warnings: [] }, [], '失敗：' + e.message); } catch (ignore) {}
-    return { ok: false, message: '寫入失敗：' + e.message + '\n（已寫入的部分請看「紀錄」分頁和試算表，必要時手動修正。）' };
+    return { ok: false, message: '寫入失敗：' + e.message };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ---- 批次：找出還沒登記的單、一次寫入 ----
+
+var BATCH_TIME_LIMIT_MS = 270000; // Apps Script 一次最多 6 分鐘，留一點餘裕
+
+// 掃描 fromDate～toDate 的訂單（從 start 開始）。時間快到時回傳 next，畫面會用 next 再呼叫一次
+function apiScan(fromDate, toDate, start) {
+  var began = Date.now();
+  var list = shopifyListOrders(fromDate, toDate);
+  var session = null;
+  var items = [];
+  var i = start || 0;
+  for (; i < list.length; i++) {
+    if (Date.now() - began > BATCH_TIME_LIMIT_MS) break;
+    var o = list[i];
+    var item = { name: o.name, createdAt: o.createdAt, source: o.source };
+    if (o.cancelled || o.test) {
+      item.status = 'skip';
+      item.note = o.cancelled ? '已取消' : '測試訂單';
+    } else if (logEntriesFor_(o.name).length) {
+      item.status = 'done';
+      item.note = '「紀錄」分頁顯示已寫入過';
+    } else {
+      try {
+        session = session || newSession_();
+        var order = shopifyFetchOrder(o.name);
+        if (!order) throw new Error('Shopify 找不到這張單');
+        var saved = session.saveRows();
+        var plan = planFor_(order, session);
+        session.restoreRows(saved);
+        var payload = previewPayload_(order, plan);
+        item.status = plan.status;
+        item.summary = plan.summary;
+        item.note = (plan.errors[0] || plan.warnings[0] || '');
+        item.preview = payload;
+        item.fingerprint = payload.fingerprint;
+      } catch (e) {
+        item.status = 'error';
+        item.note = e.message;
+      }
+    }
+    items.push(item);
+  }
+  return { items: items, next: i < list.length ? i : null, total: list.length };
+}
+
+// 依序寫入多張單。items：[{ name, fingerprint }]（照時間先後）。時間快到時回傳 next
+function apiWriteBatch(items, start) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  var began = Date.now();
+  var results = [];
+  var i = start || 0;
+  try {
+    var session = newSession_();
+    for (; i < items.length; i++) {
+      if (Date.now() - began > BATCH_TIME_LIMIT_MS) break;
+      var saved = session.saveRows();
+      var res;
+      try {
+        res = writePlan_(buildPlan_(items[i].name, session), items[i].fingerprint);
+      } catch (e) {
+        res = { ok: false, message: e.message };
+      }
+      if (!res.ok && !res.partial) session.restoreRows(saved);
+      results.push({ name: items[i].name, ok: res.ok, message: res.message || '', written: res.written || [], emailed: !!res.emailed });
+      if (res.partial) { i++; return { results: results, next: null, stopped: true }; }
+    }
+    return { results: results, next: i < items.length ? i : null };
   } finally {
     lock.releaseLock();
   }
@@ -188,11 +288,19 @@ function apiRecent() {
   return orders;
 }
 
+var LOG_MEMO_ = null;
+
+function logRows_() {
+  if (!LOG_MEMO_) {
+    var log = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(LOG_TAB);
+    LOG_MEMO_ = log && log.getLastRow() > 1 ? log.getRange(2, 1, log.getLastRow() - 1, 4).getValues() : [];
+  }
+  return LOG_MEMO_;
+}
+
 function logEntriesFor_(name) {
-  var log = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(LOG_TAB);
-  if (!log || log.getLastRow() < 2) return [];
   var tz = getSettings().TIMEZONE || 'America/Vancouver';
-  return log.getRange(2, 1, log.getLastRow() - 1, 4).getValues().filter(function (r) {
+  return logRows_().filter(function (r) {
     return String(r[1]).trim() === name && String(r[3]).indexOf('OK') === 0;
   }).map(function (r) { return r[0] instanceof Date ? Utilities.formatDate(r[0], tz, 'yyyy-MM-dd HH:mm') : String(r[0]); });
 }
@@ -200,6 +308,7 @@ function logEntriesFor_(name) {
 function appendLog_(plan, written, result) {
   var log = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(LOG_TAB);
   if (!log) return;
+  if (LOG_MEMO_) LOG_MEMO_.push([new Date(), plan.order, plan.summary || '', result]);
   log.appendRow([
     new Date(), plan.order, plan.summary || '', result,
     written.map(function (w) { return w.tab + '!' + w.row; }).join('\n'),
