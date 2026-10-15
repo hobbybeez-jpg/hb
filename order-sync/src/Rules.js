@@ -212,7 +212,9 @@ function planOrder(order, ctx, options) {
   var parts = [];
   if (facts.stock.length) parts.push('現貨 ' + facts.stock.length + ' 項');
   if (facts.pre.length) parts.push('預購/backorder ' + facts.pre.length + ' 項');
-  if (facts.popw.length) parts.push('POPW 出貨 ' + facts.popw.length + ' 項');
+  if (facts.popw.length) {
+    parts.push('POPW 出貨 ' + facts.popw.length + ' 項（' + facts.popw.map(function (l) { return RULES_RE.popwLine.exec(l.name)[1].toUpperCase(); }).join('、') + '）');
+  }
   if (facts.isPW) parts.push('存放 PW');
   if (facts.isPickup) parts.push('自取');
   if (facts.region === 'INT') parts.push('INT');
@@ -468,6 +470,13 @@ function planPopw(order, facts, ctx, plan, options) {
         return;
       }
       var oldL = rulesNum(shipped.L);
+      // L 欄已經有出貨單的運費（PW 存放時 L 是 0 或只有保險）→ 應該已經處理過
+      if (draftExtra > 0 && oldL >= draftExtra) {
+        plan.duplicates = plan.duplicates || [];
+        plan.duplicates.push(code);
+        plan.errors.push(code + ' 已經記錄在「' + shipped.tab + '」第 ' + shipped.row + ' 列（L 欄已經有 $' + oldL + '，出貨單運費 $' + draftExtra + '）。');
+        return;
+      }
       if (oldL) plan.warnings.push(code + '：已出貨表 L 欄原本是 $' + oldL + '，會加上出貨單的 $' + draftExtra + '。');
       if (rulesNum(shipped.O)) plan.warnings.push(code + '：已出貨表 O 欄原本是 $' + shipped.O + '，會改成出貨單的手續費。');
       plan.actions.push({
@@ -491,10 +500,13 @@ function planPopw(order, facts, ctx, plan, options) {
 function classifyPlan(plan) {
   if (plan.waiting) return 'waiting';
   var dups = plan.duplicates || [];
-  var appends = plan.actions.filter(function (a) { return /^append/.test(a.op); });
   if (dups.length) {
+    // 還有沒登記過的列要寫 → 部分已登記
+    var remaining = plan.actions.filter(function (a) {
+      return /^(appendShipped|appendPreorder|appendPW|updatePreorder|updateShipped)$/.test(a.op) && dups.indexOf(a.key) < 0;
+    });
     var others = plan.errors.length - dups.length;
-    return dups.length >= appends.length && others === 0 ? 'done' : 'partial';
+    return !remaining.length && others === 0 ? 'done' : 'partial';
   }
   if (plan.errors.length) return 'error';
   if (!plan.actions.some(function (a) { return !a.skip; })) return 'nothing';

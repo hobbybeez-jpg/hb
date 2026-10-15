@@ -315,6 +315,22 @@ test('現貨＋預購混合，原單有保險：現貨那一列只記運費，�
   assert.equal(r.values.N, Math.round(6 * 62.5 / 199.99 * 100) / 100);
 });
 
+test('POPW：PW 商品出貨，已出貨那一列 L 欄已經有運費 → 已登記', () => {
+  const ctx = ctxWith({ shipped: { 'CA52471D': { file: 'main', tab: '2026已出貨 CA', row: 10100, L: 19.99, O: 0.8 } } });
+  const p = planOrder(draft({ shippingCharged: 14.99, lines: [popwLine('CA52471D', 'X', '1', 0)] }), ctx);
+  assert.equal(classifyPlan(p), 'done');
+  assert.equal(ops(p, 'updateShipped').length, 0);
+  // 只有保險（$5 < 運費 $14.99）→ 還沒處理
+  const ctx2 = ctxWith({ shipped: { 'CA52471D': { file: 'main', tab: '2026已出貨 CA', row: 10100, L: 5, O: 0 } } });
+  const p2 = planOrder(draft({ shippingCharged: 14.99, lines: [popwLine('CA52471D', 'X', '1', 0)] }), ctx2);
+  assert.equal(ops(p2, 'updateShipped')[0].set.L, 19.99);
+});
+
+test('POPW：清單摘要列出原單號', () => {
+  const ctx = ctxWith({ preorders: { CA1D: { row: 5, B: '', C: '2026-03-01', D: 'X', I: 1, L: 1, M: 100, N: 100, Nvalue: 100 } } });
+  assert.match(planOrder(draft({ lines: [popwLine('CA1D', 'X', '1', 0)] }), ctx).summary, /POPW 出貨 1 項（CA1D）/);
+});
+
 test('POPW：PW 存放的現貨出貨 → 修改原本已出貨那一列的 L 和 O', () => {
   const ctx = ctxWith({ shipped: { 'CA52681D-1': { file: 'main', tab: '2026已出貨 CA', row: 10250, L: 0, O: 0 }, 'CA52681D-2': { file: 'main', tab: '2026已出貨 CA', row: 10251, L: 0, O: 0 } } });
   const p = planOrder(draft({ payments: [{ createdAt: 'x', gateway: 'paypal', amount: 16.79, fee: 0.79 }], lines: [popwLine('CA52681D-1', 'Gen', '1', 0), popwLine('CA52681D-2', 'Sonic', '2', 0)] }), ctx);
@@ -338,10 +354,12 @@ test('POPW：自取 → M=0 青色；Duties 不記', () => {
 // ---- 批次清單的狀態 ----
 
 test('classifyPlan：已登記／部分已登記／錯誤／需確認／可寫入／不用記錄', () => {
-  const a = (op) => ({ op });
-  assert.equal(classifyPlan({ actions: [a('appendShipped'), a('appendShipped')], errors: ['d1', 'd2'], warnings: [], duplicates: ['x-1', 'x-2'] }), 'done');
-  assert.equal(classifyPlan({ actions: [a('appendShipped'), a('appendPreorder')], errors: ['d1'], warnings: [], duplicates: ['x-1'] }), 'partial');
-  assert.equal(classifyPlan({ actions: [a('appendShipped')], errors: ['d1', 'other'], warnings: [], duplicates: ['x'] }), 'partial');
+  const a = (op, key) => ({ op, key });
+  assert.equal(classifyPlan({ actions: [a('appendShipped', 'x-1'), a('appendShipped', 'x-2')], errors: ['d1', 'd2'], warnings: [], duplicates: ['x-1', 'x-2'] }), 'done');
+  assert.equal(classifyPlan({ actions: [a('appendShipped', 'x-1'), a('appendPreorder', 'x-2')], errors: ['d1'], warnings: [], duplicates: ['x-1'] }), 'partial');
+  assert.equal(classifyPlan({ actions: [a('appendShipped', 'x')], errors: ['d1', 'other'], warnings: [], duplicates: ['x'] }), 'partial');
+  // POPW：已出貨那一列已存在，預購表的修改也算已處理
+  assert.equal(classifyPlan({ actions: [a('appendShipped', 'y'), a('updatePreorder', 'y')], errors: ['d'], warnings: [], duplicates: ['y'] }), 'done');
   assert.equal(classifyPlan({ actions: [], errors: ['INT 還沒付清'], warnings: [] }), 'error');
   assert.equal(classifyPlan({ actions: [a('appendShipped')], errors: [], warnings: ['w'] }), 'warn');
   assert.equal(classifyPlan({ actions: [a('appendShipped')], errors: [], warnings: [] }), 'ready');
