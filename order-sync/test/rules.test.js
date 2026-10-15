@@ -347,3 +347,31 @@ test('classifyPlan：已登記／部分已登記／錯誤／需確認／可寫�
   assert.equal(classifyPlan({ actions: [a('appendShipped')], errors: [], warnings: [] }), 'ready');
   assert.equal(classifyPlan({ actions: [{ op: 'ensureOrdering', skip: true }], errors: [], warnings: [] }), 'nothing');
 });
+
+// ---- 原單資料（預購單記錄時存，出貨時讀） ----
+
+test('預購單記錄時，存每個預購商品分到的保險、手續費、預付運費', () => {
+  const ins = line('Damage & Loss Insurance - $5.00 (Coverage up to $400 for every $5. Package theft is not covered)', 5, { sku: '', requiresShipping: false });
+  const p = planOrder(order({
+    shippingCharged: 14.99, payments: [{ createdAt: 'x', gateway: 'shopify_payments', amount: 100, fee: 4 }],
+    lines: [ins, line('P1 - Pay a 20% non-refundable deposit', 20, { sku: '11', requiresShipping: false }), line('P2 - Pay in full', 60, { sku: '22', requiresShipping: false })]
+  }));
+  const saved = ops(p, 'saveOriginal');
+  assert.equal(saved.length, 2);
+  // 全部 = 運費 14.99 + 保險 5 + 20 + 60 = 99.99；P1 分到 (20 + 2.5) / 99.99
+  assert.deepEqual(saved[0].values, { A: 'CA1000D-1', B: 'CA1000D', C: 2.5, D: Math.round(4 * 22.5 / 99.99 * 100) / 100, E: 14.99, F: '2026-10-14' });
+  assert.deepEqual([saved[1].values.C, saved[1].values.D, saved[1].values.E], [2.5, Math.round(4 * 62.5 / 99.99 * 100) / 100, 14.99]);
+});
+
+test('POPW：控制台有原單資料時直接用（原單超過 60 天也可以），不用再讀原單', () => {
+  let fetched = 0;
+  const ctx = Object.assign(ctxWith({ preorders: { 'CA1000D-1': { row: 7, B: 'shipping paid', C: '2026-02-01', D: 'P1', I: 11, L: 1, M: 99.99, N: 20, Nvalue: 20 } } }), {
+    findSaved: (code) => (code === 'CA1000D-1' ? { extras: 2.5, fee: 0.9, prepaid: 14.99 } : null),
+    findOriginal: () => { fetched++; return null; }
+  });
+  const p = planOrder(draft({ shippingCharged: 0, lines: [popwLine('CA1000D-1', 'P1', '11', 79.99)] }), ctx);
+  assert.equal(fetched, 0);
+  const r = ops(p, 'appendShipped')[0];
+  assert.deepEqual([r.values.L, r.values.N], [17.49, 0.9]);
+  assert.ok(!p.warnings.some((w) => /讀不到原單/.test(w)));
+});

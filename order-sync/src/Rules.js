@@ -315,6 +315,17 @@ function planNewOrder(order, facts, ctx, plan) {
     plan.actions.push({
       op: 'appendPreorder', key: line.code, label: '預購', values: values, colors: colors, deposit: isDeposit
     });
+    // 存到控制台「原單資料」：出貨時原單可能已經超過 60 天讀不到，先把這個商品分到的保險、手續費、預付運費記下來
+    var extrasShare = rulesExtrasShare(facts, line);
+    plan.actions.push({
+      op: 'saveOriginal', key: line.code, label: '原單資料（控制台）',
+      values: {
+        A: line.code, B: order.name, C: extrasShare,
+        D: facts.fees.unknown.length || !(weights.total > 0) ? '' : rulesRound2(facts.fees.total * (paid + extrasShare) / weights.total),
+        E: facts.stock.length ? 0 : facts.shippingPaid,
+        F: order.date
+      }
+    });
     if (!upc) {
       plan.warnings.push('「' + rulesCleanName(line.name) + '」沒有 UPC，無法對應訂貨表。');
       return;
@@ -367,13 +378,27 @@ function planPopw(order, facts, ctx, plan, options) {
       var year = Number(String(pre.C || '').slice(0, 4)) || facts.year;
       var qty = rulesNum(pre.L) || rulesNum(line.qty);
       var unitDue = rulesNum(pre.M);
-      var original = ctx.findOriginal ? ctx.findOriginal(base) : null;
 
       // 原單的保險等服務費：平分給原單的每個預購商品（現貨那幾列當時沒記）
       // 原單只有預購而且預付了運費：原單第一個出貨的商品加一次
       var origExtra = 0;
       var origFeeN = '';
-      if (original) {
+      var saved = ctx.findSaved ? ctx.findSaved(code) : null;
+      var original = saved ? null : (ctx.findOriginal ? ctx.findOriginal(base) : null);
+      if (saved) {
+        // 控制台「原單資料」：預購單記錄時存下的分攤金額
+        if (saved.extras) {
+          origExtra = rulesRound2(origExtra + saved.extras);
+          plan.notes.push(code + '：原單的保險等服務費，這一項分到 $' + saved.extras + '，加到 L 欄（控制台原單資料）。');
+        }
+        if (saved.prepaid > 0 && !(ctx.baseShipped && ctx.baseShipped(base)) && !originalsCharged[base]) {
+          origExtra = rulesRound2(origExtra + saved.prepaid);
+          originalsCharged[base] = true;
+          plan.notes.push(code + '：原單預付的運費 $' + saved.prepaid + ' 加到 L 欄（原單第一個出貨的商品）。');
+        }
+        if (saved.fee === '' || saved.fee == null) plan.warnings.push(code + '：原單記錄時沒有讀到手續費，N 欄留空。');
+        else origFeeN = rulesNum(saved.fee);
+      } else if (original) {
         var of = rulesOrderFacts(original, options);
         var origLine = rulesFindOriginalLine(of, code, pre);
         var extrasShare = rulesExtrasShare(of, origLine);

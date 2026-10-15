@@ -5,8 +5,12 @@
 
 var SHEETS_COL = { A: 1, B: 2, C: 3, D: 4, E: 5, F: 6, G: 7, H: 8, I: 9, J: 10, K: 11, L: 12, M: 13, N: 14, O: 15, P: 16, Q: 17 };
 
-function SheetsSession(settings, fetchOriginal) {
+var ORIGINALS_TAB = '原單資料';
+
+// control：控制台試算表（放「原單資料」分頁）
+function SheetsSession(settings, fetchOriginal, control) {
   this.settings = settings;
+  this.control = control || null;
   this.fetchOriginal = fetchOriginal || function () { return null; };
   this.books = {};
   this.columns = {};
@@ -120,6 +124,27 @@ SheetsSession.prototype.formatDate = function (v) {
   return String(v || '').slice(0, 10);
 };
 
+SheetsSession.prototype.originalsSheet = function () {
+  var sheet = this.control && this.control.getSheetByName(ORIGINALS_TAB);
+  return sheet ? { book: this.control, sheet: sheet, file: 'control', tab: ORIGINALS_TAB } : null;
+};
+
+// 控制台「原單資料」：{ 單號: { extras, fee, prepaid } }
+SheetsSession.prototype.savedData = function () {
+  if (!this._saved) {
+    this._saved = {};
+    var ref = this.originalsSheet();
+    var last = ref ? ref.sheet.getLastRow() : 0;
+    if (last > 1) {
+      ref.sheet.getRange(2, 1, last - 1, 5).getValues().forEach(function (r) {
+        var code = String(r[0]).trim().toUpperCase();
+        if (code) this._saved[code] = { extras: Number(r[2]) || 0, fee: r[3] === '' ? '' : Number(r[3]), prepaid: Number(r[4]) || 0 };
+      }, this);
+    }
+  }
+  return this._saved;
+};
+
 SheetsSession.prototype.preorderData = function () {
   if (!this._pre) {
     var ref = this.mainSheet(this.preorderTabName());
@@ -180,6 +205,9 @@ SheetsSession.prototype.context = function (order) {
         }
       }
       return false;
+    },
+    findSaved: function (code) {
+      return self.savedData()[String(code).toUpperCase()] || null;
     },
     findOriginal: function (base) {
       if (!(base in self.originals)) self.originals[base] = self.fetchOriginal(base) || null;
@@ -244,6 +272,11 @@ SheetsSession.prototype.resolve = function (plan) {
         }
         a.target = { file: 'main', tab: ref.sheet.getName(), row: self.nextRow(ref, [1, 2]) };
         if (a.missingDeadline) plan.warnings.push(a.missingDeadline);
+      } else if (a.op === 'saveOriginal') {
+        ref = self.originalsSheet();
+        if (!ref) { a.skip = true; a.skipReason = '控制台沒有「原單資料」分頁，沒有存（請按選單「建立／補齊分頁」）'; return; }
+        if (self.savedData()[a.key.toUpperCase()]) { a.skip = true; a.skipReason = '原單資料已經有這個單號'; return; }
+        a.target = { file: 'control', tab: ORIGINALS_TAB, row: self.nextRow(ref, [1]) };
       } else if (a.op === 'updatePreorder') {
         ref = self.mainSheet(self.preorderTabName());
         a.target = { file: 'main', tab: ref.sheet.getName(), row: a.row };
@@ -259,6 +292,7 @@ SheetsSession.prototype.resolve = function (plan) {
 
 SheetsSession.prototype.refFor = function (target) {
   if (target.file === 'popw') return this.popwSheet();
+  if (target.file === 'control') return this.originalsSheet();
   if (target.file === 'main') return this.mainSheet(target.tab);
   var m = /^year(\d{4})$/.exec(target.file);
   var book = this.book(this.settings['YEAR_SHEET_' + m[1]]);
@@ -367,6 +401,10 @@ SheetsSession.prototype.execute = function (plan) {
       sheetsCopyFormulaFromAbove_(sheet, row, SHEETS_COL.D);
       sheetsCopyFormulaFromAbove_(sheet, row, SHEETS_COL.E);
       self.remember(ref, row, { A: a.values.A, B: a.values.B });
+    } else if (a.op === 'saveOriginal') {
+      sheetsSetValues_(sheet, row, Object.assign({}, a.values, { F: sheetsToDate_(a.values.F) }));
+      self.remember(ref, row, { A: a.values.A });
+      self.savedData()[a.key.toUpperCase()] = { extras: a.values.C, fee: a.values.D, prepaid: a.values.E };
     } else if (a.op === 'updatePreorder') {
       var found = self.findRow(ref, a.key, 1);
       if (found !== row) throw new Error(a.key + '：預購表的列號變了（原本第 ' + row + ' 列），請重新預覽。');
