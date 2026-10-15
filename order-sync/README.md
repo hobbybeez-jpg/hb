@@ -28,7 +28,7 @@
 
    整個網址直接貼上也可以，會自動取出 ID。每年新增獨立年份檔時，加一列 `YEAR_SHEET_2026` 之類。
 5. **Shopify app**：在 Shopify Dev Dashboard 建一個只給這個工具用的 app（和 Receiving Tracker 的做法一樣），
-   權限勾 `read_orders`、`read_all_orders`（POPW 要讀 60 天以前的原單）、`read_products`（讀 Pre-Order Deadline），安裝到商店，
+   Scopes 填 `read_orders,read_products`，App URL 填 `https://example.com`（這個工具用不到），安裝到商店，
    然後用選單 **設定 Shopify 金鑰** 貼上 Client ID 和 Client secret。
    （2026 年以前在後台建的舊式 custom app，可以在第一個問題留空，改貼 `shpat_…` token。）
    金鑰存在 Apps Script 的指令碼屬性，不會出現在試算表裡。
@@ -53,6 +53,9 @@
 
 注意：`CLASPRC_JSON` 等於你 Google 帳號編輯 Apps Script 的權限，只放在 GitHub secret，不要貼到別的地方。
 推上去會**覆蓋**整個 Apps Script 專案的程式（設定、金鑰、「設定」「紀錄」分頁都不受影響），所以請不要直接在 Apps Script 編輯器裡改程式，要改就改 repo。
+
+沒有 `read_all_orders`（Dev Dashboard 不接受這個權限），所以只讀得到最近 60 天的訂單：POPW 出貨單的原單超過 60 天時，
+N 欄（原單手續費）留空、原單的保險不會自動加到 L 欄，預覽會用黃色提示，請人工補上。
 
 ## 使用
 
