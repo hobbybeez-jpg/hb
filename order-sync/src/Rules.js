@@ -1,0 +1,440 @@
+// Rules.js — 訂單 → 試算表的規則（純邏輯，不呼叫 Google / Shopify，可以在 Node 測試）
+//
+// planOrder(order, ctx, options) 回傳 plan：要新增／修改哪些列、每一欄的值和顏色、警告和錯誤。
+// Sheets.js 依照 plan 寫入；側邊欄先顯示 plan 給人確認。
+//
+// order 的格式（Shopify.js 的 normalizeOrder 產生，測試時由 CSV 產生）：
+// {
+//   name: 'CA53126D', date: '2026-10-14'（溫哥華日期）, source: 'web' | 'pos' | 'shopify_draft_order' | ...,
+//   financialStatus: 'paid' | 'partially_paid' | 'refunded' | ..., cancelled: false, email: '...',
+//   country: 'CA', shippingTitle: 'Flat Rate Shipping', shippingCharged: 14.99（已扣運費折扣）,
+//   lines: [{ name, qty, unitPrice, discount（這一行分到的折扣總額）, sku, barcode, requiresShipping, description }],
+//   payments: [{ createdAt, gateway, amount, fee（null＝讀不到）, feeNote }]
+// }
+
+var RULES_COLORS = {
+  gray: '#cccccc',
+  cyan: '#00ffff',
+  orange: '#ff9900',
+  blue: '#4a86e8',
+  green: '#93c47d',
+  yellow: '#ffff00'
+};
+
+var RULES_RE = {
+  service: /Damage\s*&\s*Loss Insurance|Gift Wrapping|Private Warehouse Storage Fee/i,
+  shippingLike: /shipping/i,
+  skip: /^Gift Card\b|Coin Exchange|^Transaction Fee$|^Cancellation Fee$|^Duties\b/i,
+  preorder: /\s+-\s+(Pay in full(?:\s*\([^)]*\))?|Pay a 20% non-refundable deposit)\s*$/i,
+  deposit: /Pay a 20% non-refundable deposit\s*$/i,
+  backorder: /^\s*\[backorder\]\s*/i,
+  popwLine: /^\s*#?(CA\d+D(?:-\d+)?)\s+([\s\S]*)$/i,
+  upcInName: /\((\d{6,14})\)/,
+  pickup: /Vancouver \(Renfrew\)|Pick-?\s?up|Pick up in store/i,
+  pw: /^\s*Do not Ship\.?\s*Store at my Private Warehouse/i,
+  deadline: /Pre-?Order\s*Deadline\s*:?\s*(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/i
+};
+
+function rulesRound2(x) {
+  return Math.round((Number(x) + (x >= 0 ? 1 : -1) * 1e-9) * 100) / 100;
+}
+
+function rulesNum(x) {
+  var n = Number(x);
+  return isFinite(n) ? n : 0;
+}
+
+// 去掉 [Backorder] 和 " - Pay in full (...)"、" - Pay a 20% ..." 之後的商品名稱
+function rulesCleanName(name) {
+  return String(name || '').replace(RULES_RE.backorder, '').replace(RULES_RE.preorder, '').trim();
+}
+
+function rulesUpc(line) {
+  var v = String(line.barcode || line.sku || '').trim();
+  return v;
+}
+
+// 試算表裡 UPC 存成數字（開頭的 0 會不見），比對時一律去掉開頭的 0
+function rulesUpcKey(v) {
+  return String(v == null ? '' : v).trim().replace(/\.0+$/, '').replace(/^0+/, '');
+}
+
+function rulesUpcCell(v) {
+  var s = String(v || '').trim();
+  if (/^\d{1,15}$/.test(s)) return Number(s);
+  return s;
+}
+
+function classifyLine(line, order) {
+  var name = String(line.name || '');
+  if (rulesNum(line.qty) <= 0) return 'removed';
+  if (order.source === 'shopify_draft_order' && RULES_RE.popwLine.test(name) && /\t/.test(name)) return 'popw';
+  if (RULES_RE.skip.test(name)) return 'skip';
+  if (RULES_RE.service.test(name)) return 'service';
+  if (!line.sku && !line.barcode && RULES_RE.shippingLike.test(name)) return 'service';
+  if (RULES_RE.backorder.test(name)) return 'backorder';
+  if (RULES_RE.preorder.test(name)) return 'preorder';
+  return 'stock';
+}
+
+function rulesLineTotal(line) {
+  return rulesRound2(rulesNum(line.unitPrice) * rulesNum(line.qty) - rulesNum(line.discount));
+}
+
+// 依比例分配 amount，四捨五入的差額放在最後一項
+function rulesAllocate(amount, weights) {
+  var total = weights.reduce(function (s, w) { return s + w; }, 0);
+  var out = weights.map(function () { return 0; });
+  if (!weights.length) return out;
+  if (total <= 0) { out[out.length - 1] = rulesRound2(amount); return out; }
+  var used = 0;
+  for (var i = 0; i < weights.length; i++) {
+    if (i === weights.length - 1) out[i] = rulesRound2(amount - used);
+    else { out[i] = rulesRound2(amount * weights[i] / total); used = rulesRound2(used + out[i]); }
+  }
+  return out;
+}
+
+function rulesFeeInfo(payments) {
+  var list = (payments || []).slice().sort(function (a, b) { return String(a.createdAt).localeCompare(String(b.createdAt)); });
+  var unknown = list.filter(function (p) { return p.fee == null; });
+  var sum = function (arr) { return rulesRound2(arr.reduce(function (s, p) { return s + rulesNum(p.fee); }, 0)); };
+  return {
+    total: sum(list),
+    first: list.length ? sum(list.slice(0, 1)) : 0,
+    later: sum(list.slice(1)),
+    paid: rulesRound2(list.reduce(function (s, p) { return s + rulesNum(p.amount); }, 0)),
+    unknown: unknown.map(function (p) { return p.gateway || '?'; }),
+    count: list.length
+  };
+}
+
+function rulesOrderFacts(order, options) {
+  options = options || {};
+  var lines = (order.lines || []).map(function (line, i) {
+    return Object.assign({}, line, { index: i, kind: classifyLine(line, order) });
+  });
+  var counted = lines.filter(function (l) { return l.kind === 'stock' || l.kind === 'preorder' || l.kind === 'backorder'; });
+  if (options.numbering !== 'shopify') {
+    counted = counted.filter(function (l) { return l.kind === 'stock'; })
+      .concat(counted.filter(function (l) { return l.kind !== 'stock'; }));
+  }
+  counted.forEach(function (l, i) { l.code = order.name + (counted.length > 1 ? '-' + (i + 1) : ''); });
+  var services = lines.filter(function (l) { return l.kind === 'service'; });
+  var title = String(order.shippingTitle || '');
+  var isPickup = RULES_RE.pickup.test(title);
+  var isPW = RULES_RE.pw.test(title);
+  var country = String(order.country || '').toUpperCase();
+  var region = (!isPickup && !isPW && country && country !== 'CA' && country !== 'US') ? 'INT' : 'CA';
+  var servicesTotal = rulesRound2(services.reduce(function (s, l) { return s + rulesLineTotal(l); }, 0));
+  // 運費類的自訂商品（例如 POS 加的「Flat Rate Shipping」）
+  var shippingLines = rulesRound2(services.filter(function (l) { return !RULES_RE.service.test(l.name); })
+    .reduce(function (s, l) { return s + rulesLineTotal(l); }, 0));
+  return {
+    lines: lines,
+    counted: counted,
+    stock: counted.filter(function (l) { return l.kind === 'stock'; }),
+    pre: counted.filter(function (l) { return l.kind !== 'stock'; }),
+    popw: lines.filter(function (l) { return l.kind === 'popw'; }),
+    services: services,
+    skipped: lines.filter(function (l) { return l.kind === 'skip'; }),
+    servicesTotal: servicesTotal,
+    shippingPaid: rulesRound2(rulesNum(order.shippingCharged) + shippingLines),
+    shipping: rulesRound2(rulesNum(order.shippingCharged)),
+    isPickup: isPickup,
+    isPW: isPW,
+    isPOS: order.source === 'pos',
+    isDraft: order.source === 'shopify_draft_order',
+    region: region,
+    year: Number(String(order.date).slice(0, 4)),
+    fees: rulesFeeInfo(order.payments)
+  };
+}
+
+// 原單「已付金額」的分配基準：商品（訂金只算訂金）＋運費＋服務費
+function rulesPaidWeights(facts) {
+  var stockPart = facts.stock.reduce(function (s, l) { return s + rulesLineTotal(l); }, 0) + facts.shipping + facts.servicesTotal;
+  return {
+    stockPart: rulesRound2(stockPart),
+    total: rulesRound2(stockPart + facts.pre.reduce(function (s, l) { return s + rulesLineTotal(l); }, 0))
+  };
+}
+
+function planOrder(order, ctx, options) {
+  ctx = ctx || {};
+  options = options || {};
+  var plan = { order: order.name, date: order.date, summary: '', errors: [], warnings: [], notes: [], actions: [] };
+  var facts = rulesOrderFacts(order, options);
+  plan.facts = {
+    stock: facts.stock.length, pre: facts.pre.length, popw: facts.popw.length, region: facts.region,
+    pickup: facts.isPickup, pw: facts.isPW, pos: facts.isPOS, draft: facts.isDraft
+  };
+
+  if (order.cancelled) plan.errors.push('這張單已取消，不處理。');
+  if (/refunded/i.test(order.financialStatus || '')) plan.warnings.push('這張單有退款（' + order.financialStatus + '），寫入的是目前剩下的商品，請確認。');
+  if (facts.fees.unknown.length) plan.warnings.push('讀不到手續費：' + facts.fees.unknown.join(', ') + '。手續費欄會留空。');
+  facts.skipped.forEach(function (l) { plan.notes.push('不記錄：' + l.name + '（$' + rulesLineTotal(l) + '）'); });
+  facts.lines.forEach(function (l) {
+    if (l.kind === 'stock' && l.requiresShipping === false) plan.warnings.push('「' + l.name + '」在 Shopify 設定為不需寄送，但不是預購格式，先當現貨記錄，請確認。');
+  });
+
+  if (facts.isDraft && facts.popw.length) {
+    planPopw(order, facts, ctx, plan, options);
+  } else {
+    if (/partially/i.test(order.financialStatus || '')) {
+      if (facts.region === 'INT') plan.errors.push('INT 訂單還沒付清（partially paid）：等客人付完運費 invoice 再處理。');
+      else plan.warnings.push('訂單還沒付清（' + order.financialStatus + '），請確認是否要現在記錄。');
+    }
+    if (facts.region === 'INT' && facts.stock.length && facts.shipping === 0) {
+      plan.warnings.push('INT 訂單運費是 $0：如果運費還沒報價，請等客人付完運費再處理。');
+    }
+    planNewOrder(order, facts, ctx, plan);
+  }
+
+  var parts = [];
+  if (facts.stock.length) parts.push('現貨 ' + facts.stock.length + ' 項');
+  if (facts.pre.length) parts.push('預購/backorder ' + facts.pre.length + ' 項');
+  if (facts.popw.length) parts.push('POPW 出貨 ' + facts.popw.length + ' 項');
+  if (facts.isPW) parts.push('存放 PW');
+  if (facts.isPickup) parts.push('自取');
+  if (facts.region === 'INT') parts.push('INT');
+  plan.summary = parts.join('，') || '沒有要記錄的商品';
+  if (!plan.actions.length && !plan.errors.length) plan.warnings.push('這張單沒有要寫入的資料。');
+  return plan;
+}
+
+function planNewOrder(order, facts, ctx, plan) {
+  var platform = facts.isPOS ? 'Store' : 'Shopify';
+  var weights = rulesPaidWeights(facts);
+  var stockFeeShare = weights.total > 0 ? weights.stockPart / weights.total : 1;
+  if (facts.pre.length && facts.stock.length) {
+    plan.notes.push('現貨和預購混合：手續費按已付金額比例分攤，現貨部分佔 ' + Math.round(stockFeeShare * 1000) / 10 + '%。');
+  }
+  var feeN, feeO;
+  if (facts.region === 'INT') {
+    feeN = facts.fees.first; feeO = facts.fees.later;
+  } else {
+    feeN = facts.fees.total; feeO = 0;
+  }
+  feeN = rulesRound2(feeN * stockFeeShare);
+  var feeUnknown = facts.fees.unknown.length > 0;
+
+  facts.stock.forEach(function (line, i) {
+    var first = i === 0;
+    var values = {
+      A: line.code,
+      B: order.date,
+      C: platform,
+      D: line.name,
+      J: rulesNum(line.qty),
+      K: rulesLineTotal(line),
+      L: first ? rulesRound2(facts.shipping + facts.servicesTotal) : 0,
+      N: first ? (feeUnknown ? '' : feeN) : 0,
+      O: first ? (feeUnknown ? '' : rulesRound2(feeO)) : 0
+    };
+    var colors = {};
+    if (facts.isPOS) {
+      values.M = 0;
+    } else if (facts.isPW) {
+      values.M = ''; colors.M = RULES_COLORS.orange;
+    } else if (facts.isPickup) {
+      values.M = 0; colors.M = RULES_COLORS.cyan;
+    } else if (!first) {
+      values.M = 0; colors.M = RULES_COLORS.gray;
+    } else {
+      values.M = '';
+    }
+    plan.actions.push({
+      op: 'appendShipped', year: facts.year, region: facts.region, key: line.code,
+      label: facts.year + '已出貨 ' + facts.region, values: values, colors: colors
+    });
+    if (facts.isPW) {
+      plan.actions.push({
+        op: 'appendPW', key: line.code, label: 'POPW（PW 存放）',
+        values: { C: 'PW', D: order.date, E: line.code, F: line.name, G: rulesUpcCell(rulesUpc(line)), I: rulesNum(line.qty), J: order.email || '' },
+        colors: { C: RULES_COLORS.gray }
+      });
+      if (!rulesUpc(line)) plan.warnings.push('「' + line.name + '」沒有 UPC，POPW 的 G 欄會留空。');
+    }
+  });
+
+  var preShippingPaid = !facts.stock.length && facts.shippingPaid > 0;
+  if (!facts.stock.length && facts.servicesTotal > 0) {
+    plan.notes.push('預購單的服務費／運費 $' + rulesRound2(facts.shipping + facts.servicesTotal) + ' 現在不記錄，出貨時記在已出貨的 L 欄。');
+  }
+  var seenUpc = {};
+  facts.pre.forEach(function (line) {
+    var isBackorder = line.kind === 'backorder';
+    var isDeposit = RULES_RE.deposit.test(line.name);
+    var qty = rulesNum(line.qty);
+    var paid = rulesLineTotal(line);
+    var unitDue;
+    if (isDeposit) {
+      var full = rulesRound2(rulesNum(line.unitPrice) * 5 - 0.01);
+      if (Math.round(full * 100) % 100 !== 99) {
+        plan.warnings.push('「' + rulesCleanName(line.name) + '」訂金 $' + line.unitPrice + ' ×5−0.01 = $' + full + '，不是 .99 結尾，請確認應付金額。');
+      }
+      unitDue = rulesRound2(full - rulesNum(line.discount) / qty);
+    } else {
+      unitDue = rulesRound2(paid / qty);
+    }
+    var upc = rulesUpc(line);
+    var values = {
+      A: line.code,
+      B: isBackorder ? 'backorder' : (preShippingPaid ? 'shipping paid' : ''),
+      C: order.date,
+      D: rulesCleanName(line.name),
+      I: rulesUpcCell(upc),
+      L: qty,
+      M: unitDue,
+      N: paid
+    };
+    var colors = {};
+    if (values.B === 'shipping paid') colors.B = RULES_COLORS.blue;
+    plan.actions.push({
+      op: 'appendPreorder', key: line.code, label: '預購', values: values, colors: colors, deposit: isDeposit
+    });
+    if (!upc) {
+      plan.warnings.push('「' + rulesCleanName(line.name) + '」沒有 UPC，無法對應訂貨表。');
+      return;
+    }
+    var key = rulesUpcKey(upc);
+    if (seenUpc[key]) return;
+    seenUpc[key] = true;
+    var m = RULES_RE.deadline.exec(String(line.description || '').replace(/<[^>]+>/g, ' '));
+    var deadline = m ? m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2) : '';
+    if (!deadline && !isBackorder) plan.warnings.push('「' + rulesCleanName(line.name) + '」的商品敘述找不到 Pre-Order Deadline，如果要新增到訂貨表，C 欄會留空。');
+    plan.actions.push({
+      op: 'ensureOrdering', key: key, label: '訂貨（UPC 不存在才新增）',
+      values: { A: rulesCleanName(line.name), B: rulesUpcCell(upc), C: deadline }
+    });
+  });
+}
+
+// POPW 出貨單：Draft 單，商品名稱是「CA46701D⇥品名⇥(UPC)⇥日期」
+function planPopw(order, facts, ctx, plan, options) {
+  var draftExtra = rulesRound2(facts.shipping + facts.servicesTotal);
+  var draftFee = facts.fees.unknown.length ? '' : facts.fees.total;
+  var popwRegion = facts.region;
+  var originalsCharged = {};
+  facts.stock.concat(facts.pre).forEach(function (l) {
+    plan.warnings.push('出貨單裡有不是「CA單號⇥品名」格式的商品：「' + l.name + '」，沒有記錄，請手動處理。');
+  });
+
+  facts.popw.forEach(function (line, i) {
+    var first = i === 0;
+    var m = RULES_RE.popwLine.exec(line.name);
+    var code = m[1].toUpperCase();
+    var base = code.replace(/-\d+$/, '');
+    var linePaid = rulesLineTotal(line);
+    var pre = ctx.findPreorder ? ctx.findPreorder(code) : null;
+
+    if (pre) {
+      var wasBackorder = /backorder/i.test(String(pre.B || ''));
+      if (String(pre.B || '').trim().toUpperCase() === 'Y') plan.warnings.push(code + '：預購表 B 欄已經是 Y，可能已經處理過。');
+      var year = Number(String(pre.C || '').slice(0, 4)) || facts.year;
+      var qty = rulesNum(pre.L) || rulesNum(line.qty);
+      var unitDue = rulesNum(pre.M);
+      var original = ctx.findOriginal ? ctx.findOriginal(base) : null;
+
+      // 原單的運費／服務費：原單沒有現貨（當時沒記），而且這是原單第一個出貨的商品才加
+      var origExtra = 0;
+      var origFeeN = '';
+      if (original) {
+        var of = rulesOrderFacts(original, options);
+        var extra = rulesRound2(of.shipping + of.servicesTotal);
+        var alreadyShipped = ctx.baseShipped ? ctx.baseShipped(base) : false;
+        if (!of.stock.length && extra > 0 && !alreadyShipped && !originalsCharged[base]) {
+          origExtra = extra;
+          originalsCharged[base] = true;
+          plan.notes.push(code + '：原單的運費／服務費 $' + extra + ' 加到 L 欄（原單只有預購，當時沒記）。');
+        }
+        var origLine = rulesFindOriginalLine(of, code, pre);
+        var weights = rulesPaidWeights(of);
+        if (of.fees.unknown.length) {
+          plan.warnings.push(code + '：原單 ' + base + ' 讀不到手續費，N 欄留空。');
+        } else if (!origLine) {
+          plan.warnings.push(code + '：在原單 ' + base + ' 找不到對應的商品，N 欄留空。');
+        } else {
+          var share = weights.total > 0 ? rulesLineTotal(origLine) / weights.total : 0;
+          origFeeN = rulesRound2(of.fees.total * share);
+        }
+      } else {
+        plan.warnings.push(code + '：讀不到原單 ' + base + '，N 欄（原單手續費）留空，原單的保險／運費也沒有加到 L 欄。');
+      }
+
+      var values = {
+        A: code,
+        B: pre.C,
+        C: wasBackorder ? 'Shopify' : 'PO-Shopify',
+        D: pre.D,
+        J: qty,
+        K: rulesRound2(unitDue * qty),
+        L: rulesRound2((first ? draftExtra : 0) + origExtra),
+        N: origFeeN,
+        O: first ? draftFee : 0
+      };
+      var colors = {};
+      if (facts.isPickup) { values.M = 0; colors.M = RULES_COLORS.cyan; }
+      else if (!first) { values.M = 0; colors.M = RULES_COLORS.gray; }
+      else values.M = '';
+      plan.actions.push({
+        op: 'appendShipped', year: year, region: popwRegion, key: code,
+        label: year + '已出貨 ' + popwRegion + '（POPW）', values: values, colors: colors
+      });
+
+      var paidBefore = rulesNum(pre.Nvalue != null ? pre.Nvalue : pre.N);
+      var paidAfter = rulesRound2(paidBefore + linePaid);
+      var due = rulesRound2(unitDue * qty);
+      var diff = rulesRound2(due - paidAfter);
+      plan.actions.push({
+        op: 'updatePreorder', key: code, row: pre.row, label: '預購（第 ' + pre.row + ' 列）',
+        set: { B: 'Y' }, addPaid: linePaid, paidBefore: paidBefore, paidAfter: paidAfter, due: due, diff: diff,
+        rowColor: diff === 0 ? RULES_COLORS.green : RULES_COLORS.orange
+      });
+      if (diff !== 0) {
+        plan.warnings.push(code + '：應付 $' + due + '，已付 $' + paidAfter + '，差 $' + diff + '。預購表這一列會標橘色並寄信通知。');
+      }
+      return;
+    }
+
+    var shipped = ctx.findShipped ? ctx.findShipped(code) : null;
+    if (shipped) {
+      if (!first) {
+        plan.notes.push(code + '：PW 商品出貨（第 ' + (i + 1) + ' 項），運費和手續費記在第一項，這一列不用改。');
+        return;
+      }
+      var oldL = rulesNum(shipped.L);
+      if (oldL) plan.warnings.push(code + '：已出貨表 L 欄原本是 $' + oldL + '，會加上出貨單的 $' + draftExtra + '。');
+      if (rulesNum(shipped.O)) plan.warnings.push(code + '：已出貨表 O 欄原本是 $' + shipped.O + '，會改成出貨單的手續費。');
+      plan.actions.push({
+        op: 'updateShipped', key: code, file: shipped.file, tab: shipped.tab, row: shipped.row,
+        label: shipped.tab + '（第 ' + shipped.row + ' 列，PW 出貨）',
+        set: { L: rulesRound2(oldL + draftExtra), O: draftFee }
+      });
+      if (linePaid) plan.warnings.push(code + '：PW 商品出貨單上的金額 $' + linePaid + ' 沒有記錄，請確認。');
+      return;
+    }
+
+    plan.errors.push(code + '：預購表和已出貨表都找不到這個單號。');
+  });
+}
+
+function rulesFindOriginalLine(of, code, pre) {
+  var upc = rulesUpcKey(pre && pre.I);
+  var byCode = of.counted.filter(function (l) { return l.code === code; })[0];
+  if (upc) {
+    var byUpc = of.pre.filter(function (l) { return rulesUpcKey(rulesUpc(l)) === upc; });
+    if (byUpc.length === 1) return byUpc[0];
+    if (byUpc.length > 1 && byCode && byUpc.indexOf(byCode) >= 0) return byCode;
+  }
+  return byCode || null;
+}
+
+if (typeof module !== 'undefined') {
+  module.exports = {
+    RULES_COLORS: RULES_COLORS, RULES_RE: RULES_RE, planOrder: planOrder, classifyLine: classifyLine,
+    rulesOrderFacts: rulesOrderFacts, rulesAllocate: rulesAllocate, rulesCleanName: rulesCleanName,
+    rulesUpcKey: rulesUpcKey, rulesRound2: rulesRound2, rulesFeeInfo: rulesFeeInfo
+  };
+}
