@@ -82,7 +82,7 @@ var STATUS = {
 var KIND = { stock: '現貨', preorder: '預購', backorder: 'backorder', service: '服務費/運費', skip: '不記錄', popw: 'POPW 出貨', removed: '已移除' };
 var OPS = {
   appendShipped: '新增一列', appendPreorder: '新增一列', appendPW: '新增一列', ensureOrdering: '新增一列（UPC 不存在時）',
-  updatePreorder: '修改', updateShipped: '修改'
+  updatePreorder: '修改', updateShipped: '修改', saveOriginal: '新增一列（控制台，出貨時用）'
 };
 
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }

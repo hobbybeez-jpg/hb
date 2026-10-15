@@ -232,3 +232,31 @@ test('訂貨表已有這個 UPC 時，不會因為找不到 Pre-Order Deadline �
   const run2 = run(baseOrder({ shippingCharged: 0, lines: [L('Brand New - Pay in full', 50, { sku: '4999999999999', requiresShipping: false })] }), settings);
   assert.match(run2.plan.warnings.join(), /Pre-Order Deadline/);
 });
+
+test('原單資料：預購單寫入時存到控制台；之後的 POPW（新的 session）讀得到；同一個單號不重複存', () => {
+  const { settings, pre } = setup();
+  const control = new FakeBook('CTRL', [new FakeSheet('原單資料', 41, [{ A: '單號', B: '原單' }])]);
+  const ins = L('Damage & Loss Insurance - $5.00 (Coverage up to $400 for every $5. Package theft is not covered)', 5, { sku: '', requiresShipping: false });
+  const order = baseOrder({ name: 'CA70000D', shippingCharged: 0, payments: [{ createdAt: 'x', gateway: 'shopify_payments', amount: 55, fee: 2 }],
+    lines: [ins, L('Figure - Pay in full', 50, { sku: '4570000000009', requiresShipping: false, description: 'Pre-Order Deadline: 2026-12-01' })] });
+  const s1 = new SheetsSession(settings, () => null, control);
+  const p1 = Rules.planOrder(order, s1.context(order), {});
+  s1.resolve(p1);
+  s1.execute(p1);
+  const tab = control.getSheetByName('原單資料');
+  assert.equal(tab.get('A2').v, 'CA70000D');
+  assert.deepEqual([tab.get('C2').v, tab.get('D2').v, tab.get('E2').v], [5, 2, 0]);
+  // 之後出貨（新的 session，讀不到原單）
+  const draftOrder = baseOrder({ name: 'CA79999D', source: 'shopify_draft_order', shippingCharged: 14.99, lines: [L('CA70000D\tFigure\t(4570000000009)\t2026-12-20', 0, { sku: '' })] });
+  const s2 = new SheetsSession(settings, () => null, control);
+  const p2 = Rules.planOrder(draftOrder, s2.context(draftOrder), {});
+  s2.resolve(p2);
+  const row = p2.actions.find((a) => a.op === 'appendShipped');
+  assert.deepEqual([row.values.L, row.values.N], [19.99, 2]);
+  assert.equal(pre.get('A5').v, 'CA70000D');
+  // 同一張單再算一次：原單資料已有 → 不重複存
+  const s3 = new SheetsSession(settings, () => null, control);
+  const p3 = Rules.planOrder(order, s3.context(order), {});
+  s3.resolve(p3);
+  assert.equal(p3.actions.find((a) => a.op === 'saveOriginal').skip, true);
+});

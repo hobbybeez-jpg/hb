@@ -222,7 +222,8 @@ test('POPW：付尾款後預購 B=Y、N 加上金額、應付=已付標綠；已
   const p = planOrder(draft({ lines: [popwLine('CA46701D', 'Rocketboy Platea', '4573343560693', 287.99)] }), ctx);
   assert.deepEqual(p.errors, []);
   const s = ops(p, 'appendShipped')[0];
-  assert.deepEqual(s.values, { A: 'CA46701D', B: '2026-06-03', C: 'PO-Shopify', D: 'Rocketboy Platea', J: 1, K: 359.99, L: 19.99, M: '', N: Math.round(2.6 * 72 / 77 * 100) / 100, O: 2.56 });
+  // 原單只有這一個預購商品：保險 $5 全部算它的，原單手續費也全部算它的
+  assert.deepEqual(s.values, { A: 'CA46701D', B: '2026-06-03', C: 'PO-Shopify', D: 'Rocketboy Platea', J: 1, K: 359.99, L: 19.99, M: '', N: 2.6, O: 2.56 });
   const u = ops(p, 'updatePreorder')[0];
   assert.deepEqual([u.row, u.addPaid, u.paidAfter, u.diff, u.rowColor], [3011, 287.99, 359.99, 0, GREEN]);
 });
@@ -255,18 +256,63 @@ test('POPW：原單是 2025 年 → 寫到 2025 已出貨；寄國外 → INT', 
   assert.deepEqual([s.year, s.region, s.label], [2025, 'INT', '2025已出貨 INT（POPW）']);
 });
 
-test('POPW：原單的保險只加一次（原單已有出貨紀錄就不加）', () => {
+test('POPW：原單的保險平分給每個預購商品；不管哪個先出貨，每一項都加自己那一份', () => {
+  const ins = (n) => line('Damage & Loss Insurance - $5.00 (Coverage up to $400 for every $5. Package theft is not covered)', 5, { qty: n, sku: '', requiresShipping: false });
   const orig = order({ name: 'CA9D', shippingCharged: 0, payments: [], lines: [
-    line('Damage & Loss Insurance - $5.00 (Coverage up to $400 for every $5. Package theft is not covered)', 5, { sku: '', requiresShipping: false }),
-    line('P1 - Pay in full', 50, { sku: '11', requiresShipping: false }), line('P2 - Pay in full', 60, { sku: '22', requiresShipping: false })] });
+    ins(1), line('P1 - Pay in full', 50, { sku: '11', requiresShipping: false }),
+    line('P2 - Pay in full', 60, { sku: '22', requiresShipping: false }), line('P3 - Pay in full', 70, { sku: '33', requiresShipping: false })] });
   const preorders = {
     'CA9D-1': { row: 1, B: '', C: '2026-01-01', D: 'P1', I: 11, L: 1, M: 50, N: 50, Nvalue: 50 },
-    'CA9D-2': { row: 2, B: '', C: '2026-01-01', D: 'P2', I: 22, L: 1, M: 60, N: 60, Nvalue: 60 }
+    'CA9D-2': { row: 2, B: '', C: '2026-01-01', D: 'P2', I: 22, L: 1, M: 60, N: 60, Nvalue: 60 },
+    'CA9D-3': { row: 3, B: '', C: '2026-01-01', D: 'P3', I: 33, L: 1, M: 70, N: 70, Nvalue: 70 }
   };
-  const both = planOrder(draft({ shippingCharged: 0, lines: [popwLine('CA9D-1', 'P1', '11', 0), popwLine('CA9D-2', 'P2', '22', 0)] }), ctxWith({ preorders, originals: { CA9D: orig } }));
-  assert.deepEqual(ops(both, 'appendShipped').map((r) => r.values.L), [5, 0]);
-  const later = planOrder(draft({ shippingCharged: 0, lines: [popwLine('CA9D-2', 'P2', '22', 0)] }), ctxWith({ preorders, originals: { CA9D: orig }, baseShipped: { CA9D: true } }));
-  assert.deepEqual(ops(later, 'appendShipped').map((r) => r.values.L), [0]);
+  const together = planOrder(draft({ shippingCharged: 14.99, lines: [popwLine('CA9D-1', 'P1', '11', 0), popwLine('CA9D-2', 'P2', '22', 0)] }), ctxWith({ preorders, originals: { CA9D: orig } }));
+  // $5 ÷ 3 個預購商品 = 1.67、1.67、1.66；第一項另外加出貨單運費
+  assert.deepEqual(ops(together, 'appendShipped').map((r) => r.values.L), [16.66, 1.67]);
+  const later = planOrder(draft({ shippingCharged: 0, lines: [popwLine('CA9D-3', 'P3', '33', 0)] }), ctxWith({ preorders, originals: { CA9D: orig }, baseShipped: { CA9D: true } }));
+  assert.deepEqual(ops(later, 'appendShipped').map((r) => r.values.L), [1.66]);
+});
+
+test('POPW：原單預付的運費只在第一個出貨的商品加一次', () => {
+  const orig = order({ name: 'CA8D', source: 'pos', shippingCharged: 0, payments: [], lines: [
+    line('Flat Rate Shipping', 14.99, { sku: '' }),
+    line('P1 - Pay in full', 50, { sku: '11', requiresShipping: false }), line('P2 - Pay in full', 60, { sku: '22', requiresShipping: false })] });
+  const preorders = {
+    'CA8D-1': { row: 1, B: 'shipping paid', C: '2026-01-01', D: 'P1', I: 11, L: 1, M: 50, N: 50, Nvalue: 50 },
+    'CA8D-2': { row: 2, B: 'shipping paid', C: '2026-01-01', D: 'P2', I: 22, L: 1, M: 60, N: 60, Nvalue: 60 }
+  };
+  const first = planOrder(draft({ shippingCharged: 0, lines: [popwLine('CA8D-1', 'P1', '11', 0)] }), ctxWith({ preorders, originals: { CA8D: orig } }));
+  assert.deepEqual(ops(first, 'appendShipped').map((r) => r.values.L), [14.99]);
+  const second = planOrder(draft({ shippingCharged: 0, lines: [popwLine('CA8D-2', 'P2', '22', 0)] }), ctxWith({ preorders, originals: { CA8D: orig }, baseShipped: { CA8D: true } }));
+  assert.deepEqual(ops(second, 'appendShipped').map((r) => r.values.L), [0]);
+});
+
+test('POPW：同一張原單的商品照編號從小到大寫入；不同原單照出貨單上的先後；運費和手續費記在第一項', () => {
+  const preorders = {
+    'CA48358D-2': { row: 2, B: '', C: '2026-07-01', D: 'Two', I: 2, L: 1, M: 20, N: 20, Nvalue: 20 },
+    'CA48358D-3': { row: 3, B: '', C: '2026-07-01', D: 'Three', I: 3, L: 1, M: 30, N: 30, Nvalue: 30 },
+    'CA40000D': { row: 4, B: '', C: '2026-01-01', D: 'Older', I: 4, L: 1, M: 40, N: 40, Nvalue: 40 }
+  };
+  const p = planOrder(draft({ shippingCharged: 14.99, lines: [popwLine('CA48358D-3', 'Three', '3', 0), popwLine('CA48358D-2', 'Two', '2', 0), popwLine('CA40000D', 'Older', '4', 0)] }), ctxWith({ preorders }));
+  const rows = ops(p, 'appendShipped');
+  assert.deepEqual(rows.map((r) => r.values.A), ['CA48358D-2', 'CA48358D-3', 'CA40000D']);
+  assert.deepEqual(rows.map((r) => [r.values.L, r.values.O]), [[14.99, 2.56], [0, 0], [0, 0]]);
+});
+
+test('現貨＋預購混合，原單有保險：現貨那一列只記運費，保險平分給預購商品出貨時記', () => {
+  const ins = line('Damage & Loss Insurance - $5.00 (Coverage up to $400 for every $5. Package theft is not covered)', 5, { sku: '', requiresShipping: false });
+  const orig = order({ name: 'CA52654D', shippingCharged: 14.99, payments: [{ createdAt: 'x', gateway: 'shopify_payments', amount: 200, fee: 6 }], lines: [
+    ins, line('Stock A', 50), line('Pre B - Pay in full', 60, { sku: '22', requiresShipping: false }), line('Pre C - Pay in full', 70, { sku: '33', requiresShipping: false })] });
+  const created = planOrder(orig);
+  const stockRow = ops(created, 'appendShipped')[0];
+  assert.equal(stockRow.values.L, 14.99);
+  // 手續費：現貨部分 = 50 + 14.99；全部 = 64.99 + 5 + 60 + 70
+  assert.equal(stockRow.values.N, Math.round(6 * 64.99 / 199.99 * 100) / 100);
+  const preorders = { 'CA52654D-2': { row: 9, B: '', C: '2026-10-05', D: 'Pre B', I: 22, L: 1, M: 60, N: 60, Nvalue: 60 } };
+  const popw = planOrder(draft({ shippingCharged: 0, lines: [popwLine('CA52654D-2', 'Pre B', '22', 0)] }), ctxWith({ preorders, originals: { CA52654D: orig }, baseShipped: { CA52654D: true } }));
+  const r = ops(popw, 'appendShipped')[0];
+  assert.equal(r.values.L, 2.5);
+  assert.equal(r.values.N, Math.round(6 * 62.5 / 199.99 * 100) / 100);
 });
 
 test('POPW：PW 存放的現貨出貨 → 修改原本已出貨那一列的 L 和 O', () => {
@@ -300,4 +346,32 @@ test('classifyPlan：已登記／部分已登記／錯誤／需確認／可寫�
   assert.equal(classifyPlan({ actions: [a('appendShipped')], errors: [], warnings: ['w'] }), 'warn');
   assert.equal(classifyPlan({ actions: [a('appendShipped')], errors: [], warnings: [] }), 'ready');
   assert.equal(classifyPlan({ actions: [{ op: 'ensureOrdering', skip: true }], errors: [], warnings: [] }), 'nothing');
+});
+
+// ---- 原單資料（預購單記錄時存，出貨時讀） ----
+
+test('預購單記錄時，存每個預購商品分到的保險、手續費、預付運費', () => {
+  const ins = line('Damage & Loss Insurance - $5.00 (Coverage up to $400 for every $5. Package theft is not covered)', 5, { sku: '', requiresShipping: false });
+  const p = planOrder(order({
+    shippingCharged: 14.99, payments: [{ createdAt: 'x', gateway: 'shopify_payments', amount: 100, fee: 4 }],
+    lines: [ins, line('P1 - Pay a 20% non-refundable deposit', 20, { sku: '11', requiresShipping: false }), line('P2 - Pay in full', 60, { sku: '22', requiresShipping: false })]
+  }));
+  const saved = ops(p, 'saveOriginal');
+  assert.equal(saved.length, 2);
+  // 全部 = 運費 14.99 + 保險 5 + 20 + 60 = 99.99；P1 分到 (20 + 2.5) / 99.99
+  assert.deepEqual(saved[0].values, { A: 'CA1000D-1', B: 'CA1000D', C: 2.5, D: Math.round(4 * 22.5 / 99.99 * 100) / 100, E: 14.99, F: '2026-10-14' });
+  assert.deepEqual([saved[1].values.C, saved[1].values.D, saved[1].values.E], [2.5, Math.round(4 * 62.5 / 99.99 * 100) / 100, 14.99]);
+});
+
+test('POPW：控制台有原單資料時直接用（原單超過 60 天也可以），不用再讀原單', () => {
+  let fetched = 0;
+  const ctx = Object.assign(ctxWith({ preorders: { 'CA1000D-1': { row: 7, B: 'shipping paid', C: '2026-02-01', D: 'P1', I: 11, L: 1, M: 99.99, N: 20, Nvalue: 20 } } }), {
+    findSaved: (code) => (code === 'CA1000D-1' ? { extras: 2.5, fee: 0.9, prepaid: 14.99 } : null),
+    findOriginal: () => { fetched++; return null; }
+  });
+  const p = planOrder(draft({ shippingCharged: 0, lines: [popwLine('CA1000D-1', 'P1', '11', 79.99)] }), ctx);
+  assert.equal(fetched, 0);
+  const r = ops(p, 'appendShipped')[0];
+  assert.deepEqual([r.values.L, r.values.N], [17.49, 0.9]);
+  assert.ok(!p.warnings.some((w) => /讀不到原單/.test(w)));
 });

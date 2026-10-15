@@ -139,6 +139,8 @@ function rulesOrderFacts(order, options) {
     services: services,
     skipped: lines.filter(function (l) { return l.kind === 'skip'; }),
     servicesTotal: servicesTotal,
+    // 保險、禮品包裝、Storage Fee（不含運費類的自訂商品）
+    extras: rulesRound2(servicesTotal - shippingLines),
     shippingPaid: rulesRound2(rulesNum(order.shippingCharged) + shippingLines),
     shipping: rulesRound2(rulesNum(order.shippingCharged)),
     isPickup: isPickup,
@@ -152,12 +154,28 @@ function rulesOrderFacts(order, options) {
 }
 
 // 原單「已付金額」的分配基準：商品（訂金只算訂金）＋運費＋服務費
+// 有預購商品時，保險等服務費算在預購商品（出貨時平分記到 L 欄），不算在現貨
 function rulesPaidWeights(facts) {
-  var stockPart = facts.stock.reduce(function (s, l) { return s + rulesLineTotal(l); }, 0) + facts.shipping + facts.servicesTotal;
+  var extrasToPre = facts.pre.length ? facts.extras : 0;
+  var stockPart = facts.stock.reduce(function (s, l) { return s + rulesLineTotal(l); }, 0) + facts.shippingPaid + (facts.extras - extrasToPre);
   return {
     stockPart: rulesRound2(stockPart),
-    total: rulesRound2(stockPart + facts.pre.reduce(function (s, l) { return s + rulesLineTotal(l); }, 0))
+    total: rulesRound2(stockPart + extrasToPre + facts.pre.reduce(function (s, l) { return s + rulesLineTotal(l); }, 0))
   };
+}
+
+// 原單的保險等服務費平分給每個預購商品，回傳這個商品分到的金額
+function rulesExtrasShare(of, origLine) {
+  if (!(of.extras > 0) || !of.pre.length || !origLine) return 0;
+  var idx = of.pre.indexOf(origLine);
+  if (idx < 0) return 0;
+  return rulesAllocate(of.extras, of.pre.map(function () { return 1; }))[idx];
+}
+
+// CA42482D-3 → [42482, 3]，用來把出貨單的商品照單號排序
+function rulesCodeOrder(code) {
+  var m = /CA(\d+)D(?:-(\d+))?/i.exec(code);
+  return m ? [Number(m[1]), Number(m[2] || 0)] : [Infinity, 0];
 }
 
 function planOrder(order, ctx, options) {
@@ -228,7 +246,7 @@ function planNewOrder(order, facts, ctx, plan) {
       D: line.name,
       J: rulesNum(line.qty),
       K: rulesLineTotal(line),
-      L: first ? rulesRound2(facts.shipping + facts.servicesTotal) : 0,
+      L: first ? (facts.pre.length ? facts.shippingPaid : rulesRound2(facts.shipping + facts.servicesTotal)) : 0,
       N: first ? (feeUnknown ? '' : feeN) : 0,
       O: first ? (feeUnknown ? '' : rulesRound2(feeO)) : 0
     };
@@ -259,8 +277,11 @@ function planNewOrder(order, facts, ctx, plan) {
   });
 
   var preShippingPaid = !facts.stock.length && facts.shippingPaid > 0;
-  if (!facts.stock.length && facts.servicesTotal > 0) {
-    plan.notes.push('預購單的服務費／運費 $' + rulesRound2(facts.shipping + facts.servicesTotal) + ' 現在不記錄，出貨時記在已出貨的 L 欄。');
+  if (facts.pre.length && facts.extras > 0) {
+    plan.notes.push('保險等服務費 $' + facts.extras + ' 平分給 ' + facts.pre.length + ' 個預購商品，每個商品出貨時記在已出貨的 L 欄。');
+  }
+  if (preShippingPaid && facts.pre.length) {
+    plan.notes.push('預付的運費 $' + facts.shippingPaid + ' 在第一個預購商品出貨時記在已出貨的 L 欄。');
   }
   var seenUpc = {};
   facts.pre.forEach(function (line) {
@@ -294,6 +315,17 @@ function planNewOrder(order, facts, ctx, plan) {
     plan.actions.push({
       op: 'appendPreorder', key: line.code, label: '預購', values: values, colors: colors, deposit: isDeposit
     });
+    // 存到控制台「原單資料」：出貨時原單可能已經超過 60 天讀不到，先把這個商品分到的保險、手續費、預付運費記下來
+    var extrasShare = rulesExtrasShare(facts, line);
+    plan.actions.push({
+      op: 'saveOriginal', key: line.code, label: '原單資料（控制台）',
+      values: {
+        A: line.code, B: order.name, C: extrasShare,
+        D: facts.fees.unknown.length || !(weights.total > 0) ? '' : rulesRound2(facts.fees.total * (paid + extrasShare) / weights.total),
+        E: facts.stock.length ? 0 : facts.shippingPaid,
+        F: order.date
+      }
+    });
     if (!upc) {
       plan.warnings.push('「' + rulesCleanName(line.name) + '」沒有 UPC，無法對應訂貨表。');
       return;
@@ -322,7 +354,17 @@ function planPopw(order, facts, ctx, plan, options) {
     plan.warnings.push('出貨單裡有不是「CA單號⇥品名」格式的商品：「' + l.name + '」，沒有記錄，請手動處理。');
   });
 
-  facts.popw.forEach(function (line, i) {
+  // 同一張原單的商品照編號從小到大寫入（CA42482D-1、-2、-3…）；不同原單照出貨單上的先後。運費和手續費記在第一項
+  var firstSeen = {};
+  facts.popw.forEach(function (l, i) {
+    var base = rulesCodeOrder(RULES_RE.popwLine.exec(l.name)[1])[0];
+    if (!(base in firstSeen)) firstSeen[base] = i;
+  });
+  var popwLines = facts.popw.slice().sort(function (a, b) {
+    var x = rulesCodeOrder(RULES_RE.popwLine.exec(a.name)[1]), y = rulesCodeOrder(RULES_RE.popwLine.exec(b.name)[1]);
+    return firstSeen[x[0]] - firstSeen[y[0]] || x[1] - y[1] || a.index - b.index;
+  });
+  popwLines.forEach(function (line, i) {
     var first = i === 0;
     var m = RULES_RE.popwLine.exec(line.name);
     var code = m[1].toUpperCase();
@@ -336,28 +378,48 @@ function planPopw(order, facts, ctx, plan, options) {
       var year = Number(String(pre.C || '').slice(0, 4)) || facts.year;
       var qty = rulesNum(pre.L) || rulesNum(line.qty);
       var unitDue = rulesNum(pre.M);
-      var original = ctx.findOriginal ? ctx.findOriginal(base) : null;
 
-      // 原單的運費／服務費：原單沒有現貨（當時沒記），而且這是原單第一個出貨的商品才加
+      // 原單的保險等服務費：平分給原單的每個預購商品（現貨那幾列當時沒記）
+      // 原單只有預購而且預付了運費：原單第一個出貨的商品加一次
       var origExtra = 0;
       var origFeeN = '';
-      if (original) {
-        var of = rulesOrderFacts(original, options);
-        var extra = rulesRound2(of.shipping + of.servicesTotal);
-        var alreadyShipped = ctx.baseShipped ? ctx.baseShipped(base) : false;
-        if (!of.stock.length && extra > 0 && !alreadyShipped && !originalsCharged[base]) {
-          origExtra = extra;
-          originalsCharged[base] = true;
-          plan.notes.push(code + '：原單的運費／服務費 $' + extra + ' 加到 L 欄（原單只有預購，當時沒記）。');
+      var saved = ctx.findSaved ? ctx.findSaved(code) : null;
+      var original = saved ? null : (ctx.findOriginal ? ctx.findOriginal(base) : null);
+      if (saved) {
+        // 控制台「原單資料」：預購單記錄時存下的分攤金額
+        if (saved.extras) {
+          origExtra = rulesRound2(origExtra + saved.extras);
+          plan.notes.push(code + '：原單的保險等服務費，這一項分到 $' + saved.extras + '，加到 L 欄（控制台原單資料）。');
         }
+        if (saved.prepaid > 0 && !(ctx.baseShipped && ctx.baseShipped(base)) && !originalsCharged[base]) {
+          origExtra = rulesRound2(origExtra + saved.prepaid);
+          originalsCharged[base] = true;
+          plan.notes.push(code + '：原單預付的運費 $' + saved.prepaid + ' 加到 L 欄（原單第一個出貨的商品）。');
+        }
+        if (saved.fee === '' || saved.fee == null) plan.warnings.push(code + '：原單記錄時沒有讀到手續費，N 欄留空。');
+        else origFeeN = rulesNum(saved.fee);
+      } else if (original) {
+        var of = rulesOrderFacts(original, options);
         var origLine = rulesFindOriginalLine(of, code, pre);
+        var extrasShare = rulesExtrasShare(of, origLine);
+        if (of.extras > 0 && !origLine) plan.warnings.push(code + '：在原單 ' + base + ' 找不到對應的商品，原單的保險沒有加到 L 欄。');
+        if (extrasShare) {
+          origExtra = rulesRound2(origExtra + extrasShare);
+          plan.notes.push(code + '：原單的保險等服務費 $' + of.extras + ' 平分給 ' + of.pre.length + ' 個預購商品，這一項加 $' + extrasShare + ' 到 L 欄。');
+        }
+        var alreadyShipped = ctx.baseShipped ? ctx.baseShipped(base) : false;
+        if (!of.stock.length && of.shippingPaid > 0 && !alreadyShipped && !originalsCharged[base]) {
+          origExtra = rulesRound2(origExtra + of.shippingPaid);
+          originalsCharged[base] = true;
+          plan.notes.push(code + '：原單預付的運費 $' + of.shippingPaid + ' 加到 L 欄（原單第一個出貨的商品）。');
+        }
         var weights = rulesPaidWeights(of);
         if (of.fees.unknown.length) {
           plan.warnings.push(code + '：原單 ' + base + ' 讀不到手續費，N 欄留空。');
         } else if (!origLine) {
           plan.warnings.push(code + '：在原單 ' + base + ' 找不到對應的商品，N 欄留空。');
         } else {
-          var share = weights.total > 0 ? rulesLineTotal(origLine) / weights.total : 0;
+          var share = weights.total > 0 ? (rulesLineTotal(origLine) + extrasShare) / weights.total : 0;
           origFeeN = rulesRound2(of.fees.total * share);
         }
       } else {

@@ -26,7 +26,7 @@ function onOpen() {
     .addSeparator()
     .addItem('設定 Shopify 金鑰', 'promptShopifySecrets')
     .addItem('測試 Shopify 連線（看一張訂單的原始資料）', 'testShopifyConnection')
-    .addItem('建立／補齊「設定」和「紀錄」分頁', 'setupTabs')
+    .addItem('建立／補齊「設定」「紀錄」「原單資料」分頁', 'setupTabs')
     .addToUi();
 }
 
@@ -48,7 +48,12 @@ function setupTabs() {
   } else if (!log.getRange(1, 8).getValue()) {
     log.getRange(1, 8).setValue('寫入的試算表').setFontWeight('bold');
   }
-  SpreadsheetApp.getUi().alert('「設定」和「紀錄」分頁已建立。請在「設定」填好試算表 ID，再用選單「設定 Shopify 金鑰」。');
+  var orig = book.getSheetByName(ORIGINALS_TAB) || book.insertSheet(ORIGINALS_TAB);
+  if (orig.getLastRow() === 0) {
+    orig.getRange(1, 1, 1, 6).setValues([['單號', '原單', '保險等服務費（這一項分到的）', '原單手續費（這一項分到的）', '預付運費（整張原單）', '原單日期']]).setFontWeight('bold');
+    orig.setFrozenRows(1);
+  }
+  SpreadsheetApp.getUi().alert('「設定」、「紀錄」、「原單資料」分頁已建立。請在「設定」填好試算表 ID，再用選單「設定 Shopify 金鑰」。');
 }
 
 var SETTINGS_MEMO_ = null;
@@ -122,7 +127,7 @@ function openReviewDialog() {
 // ---- 給 Dialog.html 呼叫的函式 ----
 
 function newSession_() {
-  return new SheetsSession(getSettings(), function (base) { return shopifyFetchOrder(base); });
+  return new SheetsSession(getSettings(), function (base) { return shopifyFetchOrder(base); }, SpreadsheetApp.getActiveSpreadsheet());
 }
 
 function planFor_(order, session) {
