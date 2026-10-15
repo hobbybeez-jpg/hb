@@ -212,21 +212,30 @@ function setMode(m) {
 function scan() {
   var from = document.getElementById('from').value, to = document.getElementById('to').value;
   if (!from || !to) { alert('請選擇日期範圍'); return; }
-  batch = { from: from, to: to, items: [], checked: {}, showAll: false, busy: true, total: 0 };
+  batch = { from: from, to: to, items: [], checked: {}, showAll: false, busy: true, total: null, list: [], started: Date.now() };
   current = null; updateWrite();
   setMode('batch');
   renderBatch();
-  scanNext(0);
+  var mine = batch;
+  var timer = setInterval(function () {
+    if (batch !== mine || !mine.busy) { clearInterval(timer); return; }
+    renderBatch();
+  }, 5000);
+  google.script.run.withSuccessHandler(function (list) {
+    batch.list = list;
+    batch.total = list.length;
+    renderBatch();
+    if (list.length) scanChunk(0); else { batch.busy = false; renderBatch(); }
+  }).withFailureHandler(function (e) { batch.busy = false; batch.error = e.message; renderBatch(); }).apiScanList(from, to);
 }
 
-function scanNext(start) {
+function scanChunk(start) {
   google.script.run.withSuccessHandler(function (r) {
-    batch.total = r.total;
     r.items.forEach(function (it) { batch.items.push(it); if (it.status === 'ready') batch.checked[it.name] = true; });
-    if (r.next !== null && r.next !== undefined) { renderBatch(); scanNext(r.next); return; }
+    if (r.next !== null && r.next !== undefined) { renderBatch(); scanChunk(r.next); return; }
     batch.busy = false;
     renderBatch();
-  }).withFailureHandler(function (e) { batch.busy = false; batch.error = e.message; renderBatch(); }).apiScan(batch.from, batch.to, start);
+  }).withFailureHandler(function (e) { batch.busy = false; batch.error = e.message; renderBatch(); }).apiScanChunk(batch.list, start);
 }
 
 function findItem(name) { return batch && batch.items.filter(function (x) { return x.name === name; })[0]; }
@@ -235,8 +244,9 @@ function renderBatch() {
   if (!batch) return;
   var counts = {};
   batch.items.forEach(function (it) { counts[it.status] = (counts[it.status] || 0) + 1; });
-  var h = ['<h3>' + esc(batch.from) + ' ～ ' + esc(batch.to) + '　共 ' + batch.total + ' 張訂單' +
-    (batch.busy ? '　<span class="muted">掃描中… ' + batch.items.length + ' / ' + (batch.total || '?') + '</span>' : '') + '</h3>'];
+  var h = ['<h3>' + esc(batch.from) + ' ～ ' + esc(batch.to) + '　共 ' + (batch.total === null ? '?' : batch.total) + ' 張訂單' +
+    (batch.busy ? '　<span class="muted">' + (batch.total === null ? '讀取訂單清單…' : '掃描中… ' + batch.items.length + ' / ' + batch.total +
+      '（已用 ' + Math.round((Date.now() - batch.started) / 1000) + ' 秒，每 1～2 分鐘更新一次）') + '</span>' : '') + '</h3>'];
   if (batch.error) h.push('<div class="msg err">' + esc(batch.error) + '</div>');
   h.push('<div>' + Object.keys(STATUS).filter(function (k) { return counts[k]; }).map(function (k) {
     return '<span class="badge ' + STATUS[k][1] + '">' + STATUS[k][0] + ' ' + counts[k] + '</span>';

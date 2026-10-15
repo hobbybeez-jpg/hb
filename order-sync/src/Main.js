@@ -212,17 +212,22 @@ function apiWrite(orderName, fingerprint) {
 // ---- 批次：找出還沒登記的單、一次寫入 ----
 
 var BATCH_TIME_LIMIT_MS = 270000; // Apps Script 一次最多 6 分鐘，留一點餘裕
+var SCAN_CHUNK_MS = 90000;        // 掃描每一段最多 1.5 分鐘就回傳，畫面才會一直更新進度
 
-// 掃描 fromDate～toDate 的訂單（從 start 開始）。時間快到時回傳 next，畫面會用 next 再呼叫一次
-function apiScan(fromDate, toDate, start) {
+// 掃描第一步：列出 fromDate～toDate 內下單或有更新的訂單（很快，畫面先顯示總共幾張）
+function apiScanList(fromDate, toDate) {
+  return shopifyListOrders(fromDate, toDate);
+}
+
+// 掃描第二步：從 start 開始逐張判斷，時間到就回傳 next，畫面會用 next 再呼叫一次
+function apiScanChunk(orders, start) {
   var began = Date.now();
-  var list = shopifyListOrders(fromDate, toDate);
   var session = null;
   var items = [];
   var i = start || 0;
-  for (; i < list.length; i++) {
-    if (Date.now() - began > BATCH_TIME_LIMIT_MS) break;
-    var o = list[i];
+  for (; i < orders.length; i++) {
+    if (items.length && Date.now() - began > SCAN_CHUNK_MS) break;
+    var o = orders[i];
     var item = { name: o.name, createdAt: o.createdAt, source: o.source };
     if (o.cancelled || o.test) {
       item.status = 'skip';
@@ -251,7 +256,7 @@ function apiScan(fromDate, toDate, start) {
     }
     items.push(item);
   }
-  return { items: items, next: i < list.length ? i : null, total: list.length };
+  return { items: items, next: i < orders.length ? i : null };
 }
 
 // 依序寫入多張單。items：[{ name, fingerprint }]（照時間先後）。時間快到時回傳 next
