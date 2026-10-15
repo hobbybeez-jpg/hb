@@ -12,6 +12,11 @@ function shiftRows(formula, delta) {
   return formula.replace(/(\$?)([A-Z]{1,3})(\$?)(\d+)/g, (all, d1, col, d2, row) => (d2 ? all : d1 + col + (Number(row) + delta)));
 }
 
+// 讀寫次數：寫入之後還去讀，真的 Google 試算表就得先整份重算（很慢），測試用來抓這種情況
+const IO = { writes: 0, readsAfterWrite: 0, reset() { this.writes = 0; this.readsAfterWrite = 0; } };
+const R = () => { if (IO.writes) IO.readsAfterWrite++; };
+const W = () => { IO.writes++; };
+
 class FakeRange {
   constructor(sheet, row, col, rows, cols) { Object.assign(this, { sheet, row, col, rows, cols }); }
   cells(fn) {
@@ -23,26 +28,29 @@ class FakeRange {
     }
     return out;
   }
-  getValues() { return this.cells((x) => (x.v === undefined ? '' : x.v)); }
+  getValues() { R(); return this.cells((x) => (x.v === undefined ? '' : x.v)); }
   getValue() { return this.getValues()[0][0]; }
-  getFormulas() { return this.cells((x) => x.f || ''); }
+  getFormulas() { R(); return this.cells((x) => x.f || ''); }
   getFormula() { return this.getFormulas()[0][0]; }
-  getFormulaR1C1() { const x = this.sheet.cell(this.row, this.col); return x.f ? `R1C1|${this.row}|${x.f}` : ''; }
+  getFormulasR1C1() { R(); return this.cells((x, r) => (x.f ? `R1C1|${r}|${x.f}` : '')); }
+  getFormulaR1C1() { return this.getFormulasR1C1()[0][0]; }
   setFormulaR1C1(enc) {
     const [, src, f] = enc.split('|');
     this.setFormula(shiftRows(f, this.row - Number(src)));
     return this;
   }
-  setValue(v) { this.cells((x) => { x.v = v; delete x.f; }); return this; }
-  setValues(rows) { this.cells((x, r, c) => { x.v = rows[r - this.row][c - this.col]; delete x.f; }); return this; }
-  setFormula(f) { this.cells((x) => { x.f = f; x.v = ''; }); return this; }
-  setBackground(c) { this.cells((x) => { x.bg = c; }); return this; }
-  getNumberFormat() { return this.sheet.cell(this.row, this.col).fmt || ''; }
-  setNumberFormat(f) { this.cells((x) => { x.fmt = f; }); return this; }
+  setValue(v) { W(); this.cells((x) => { x.v = v; delete x.f; }); return this; }
+  setValues(rows) { W(); this.cells((x, r, c) => { x.v = rows[r - this.row][c - this.col]; delete x.f; }); return this; }
+  setFormula(f) { W(); this.cells((x) => { x.f = f; x.v = ''; }); return this; }
+  setBackground(c) { W(); this.cells((x) => { x.bg = c; }); return this; }
+  getNumberFormats() { R(); return this.cells((x) => x.fmt || ''); }
+  getNumberFormat() { return this.getNumberFormats()[0][0]; }
+  setNumberFormat(f) { W(); this.cells((x) => { x.fmt = f; }); return this; }
   isPartOfMerge() {
+    R();
     return this.sheet.merges.some((m) => m.row === this.row && this.col < m.col + m.cols && m.col < this.col + this.cols);
   }
-  merge() { this.sheet.merges.push({ row: this.row, col: this.col, cols: this.cols }); return this; }
+  merge() { W(); this.sheet.merges.push({ row: this.row, col: this.col, cols: this.cols }); return this; }
 }
 
 class FakeSheet {
@@ -69,12 +77,14 @@ class FakeSheet {
   getSheetId() { return this.id; }
   getRange(row, col, rows, cols) { return new FakeRange(this, row, col, rows || 1, cols || 1); }
   getLastRow() {
+    R();
     let last = 0;
     for (const [k, x] of this.data) if ((x.v !== undefined && x.v !== '') || x.f) last = Math.max(last, Number(k.split(',')[0]));
     return last;
   }
-  getMaxRows() { return this.maxRows; }
-  insertRowsAfter(after, n) { this.maxRows += n; }
+  getMaxRows() { R(); return this.maxRows; }
+  getMaxColumns() { return 26; }
+  insertRowsAfter(after, n) { W(); this.maxRows += n; }
 }
 
 class FakeBook {
@@ -88,4 +98,4 @@ function installFake(books) {
   global.SpreadsheetApp = { openById: (id) => { const b = books[id]; if (!b) throw new Error('no book ' + id); return b; } };
 }
 
-module.exports = { FakeSheet, FakeBook, installFake, colLetter };
+module.exports = { FakeSheet, FakeBook, installFake, colLetter, IO };

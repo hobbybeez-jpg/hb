@@ -6,7 +6,7 @@ const Rules = require('../src/Rules.js');
 global.rulesUpcKey = Rules.rulesUpcKey;
 global.RULES_COLORS = Rules.RULES_COLORS;
 const { SheetsSession, sheetsNewPaidFormula_ } = require('../src/Sheets.js');
-const { FakeSheet, FakeBook, installFake } = require('./fake-sheets.js');
+const { FakeSheet, FakeBook, installFake, IO } = require('./fake-sheets.js');
 
 function setup() {
   const shippedRows = [
@@ -259,4 +259,32 @@ test('原單資料：預購單寫入時存到控制台；之後的 POPW（新的
   const p3 = Rules.planOrder(order, s3.context(order), {});
   s3.resolve(p3);
   assert.equal(p3.actions.find((a) => a.op === 'saveOriginal').skip, true);
+});
+
+test('寫入時不會「寫完再讀」：一批好幾張單（現貨、預購、PW、POPW），開始寫之後一次都沒有再讀試算表', () => {
+  const { settings, ca, pre, popwTab } = setup();
+  const control = new FakeBook('CTRL', [new FakeSheet('原單資料', 41, [{ A: '單號' }])]);
+  const session = new SheetsSession(settings, () => null, control);
+  const orders = [
+    baseOrder({ name: 'CA80001D', lines: [L('A', 10), L('B', 20)] }),
+    baseOrder({ name: 'CA80002D', shippingCharged: 0, lines: [L('New - Pay in full', 50, { sku: '4999999999998', requiresShipping: false, description: 'Pre-Order Deadline: 2026-12-01' })] }),
+    baseOrder({ name: 'CA80003D', shippingTitle: 'Do not Ship. Store at my Private Warehouse for now (60-day free storage)', shippingCharged: 0, lines: [L('PW item', 30)] }),
+    baseOrder({ name: 'CA80004D', source: 'shopify_draft_order', lines: [L('CA46701D\tRocketboy Platea\t(4573343560693)\t2026-09-23', 287.99, { sku: '' })] }),
+    baseOrder({ name: 'CA80005D', lines: [L('C', 40)] })
+  ];
+  session.warmUp(2026);
+  IO.reset();
+  orders.forEach((o) => {
+    const plan = Rules.planOrder(o, session.context(o), {});
+    session.resolve(plan);
+    assert.deepEqual(plan.errors, []);
+    session.execute(plan);
+  });
+  assert.ok(IO.writes > 0);
+  assert.equal(IO.readsAfterWrite, 0);
+  assert.deepEqual([4, 5, 6, 7, 8, 9].map((r) => ca.get('A' + r).v), ['CA80001D-1', 'CA80001D-2', 'CA80003D', 'CA46701D', 'CA80005D', undefined]);
+  assert.equal(pre.get('A5').v, 'CA80002D');
+  assert.equal(pre.get('J5').f, '=IFERROR(VLOOKUP(I5, 訂貨!B:L,8, FALSE()),"")');
+  assert.equal(pre.get('N3').f, '=72+287.99');
+  assert.equal(popwTab.get('M3').f, '=IF(ISBLANK(D3), "", D3 + 60)');
 });

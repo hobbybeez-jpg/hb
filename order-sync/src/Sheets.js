@@ -72,8 +72,8 @@ SheetsSession.prototype.shippedYears = function (fromYear) {
   return Object.keys(years).map(Number).sort(function (a, b) { return b - a; });
 };
 
-// 欄位資料：A～F 欄一次讀進來（找單號、找最後一列都用這幾欄），大試算表少讀幾次比較快
-var SHEETS_BLOCK_COLS = 6;
+// 欄位資料：A～O 欄一次讀進來（找單號、找最後一列、PW 出貨要看的 L／O 都在這裡），大試算表少讀幾次比較快
+var SHEETS_BLOCK_COLS = 15;
 
 SheetsSession.prototype.columnValues = function (ref, col) {
   var id = ref.sheet.getSheetId ? ref.sheet.getSheetId() : ref.sheet.getName();
@@ -101,19 +101,48 @@ SheetsSession.prototype.findRow = function (ref, key, col) {
   return 0;
 };
 
-// 最後一筆資料的下一列（看指定的幾欄）；試算表預先填好格式／公式的空白列不算資料
+// 最後一筆資料在第幾列（看指定的幾欄）；試算表預先填好格式／公式的空白列不算資料
+SheetsSession.prototype.lastDataRow = function (ref, cols) {
+  var cacheKey = (ref.book.getId ? ref.book.getId() : '') + '|' + ref.sheet.getName();
+  this.lastRows = this.lastRows || {};
+  if (!(cacheKey in this.lastRows)) {
+    var last = 0;
+    cols.forEach(function (c) {
+      var values = this.columnValues(ref, c);
+      for (var i = values.length - 1; i >= 0; i--) {
+        if (values[i] !== '' && values[i] !== null) { last = Math.max(last, i + 1); break; }
+      }
+    }, this);
+    this.lastRows[cacheKey] = last;
+  }
+  return this.lastRows[cacheKey];
+};
+
+// 最後一筆資料的下一列；同一個 session 連續要好幾列時依序往下
 SheetsSession.prototype.nextRow = function (ref, cols) {
   var cacheKey = (ref.book.getId ? ref.book.getId() : '') + '|' + ref.sheet.getName();
   if (this.nextRows[cacheKey]) return this.nextRows[cacheKey]++;
-  var last = 0;
-  cols.forEach(function (c) {
-    var values = this.columnValues(ref, c);
-    for (var i = values.length - 1; i >= 0; i--) {
-      if (values[i] !== '' && values[i] !== null) { last = Math.max(last, i + 1); break; }
-    }
-  }, this);
+  var last = this.lastDataRow(ref, cols);
   this.nextRows[cacheKey] = last + 2;
   return last + 1;
+};
+
+// 批次寫入前先把會用到的分頁都讀好（寫入之後再讀，大試算表就得先整份重算）
+SheetsSession.prototype.warmUp = function (year) {
+  var self = this;
+  function touch(ref, cols) {
+    if (!ref) return;
+    self.lastDataRow(ref, cols);
+    self.template(ref);
+  }
+  this.shippedYears(year).forEach(function (y) {
+    ['CA', 'INT'].forEach(function (r) { touch(self.shippedSheet(y, r), [1, 2, 3, 4]); });
+  });
+  try { touch(this.mainSheet(this.preorderTabName()), [1, 3, 4]); this.preorderData(); } catch (e) { /* 沒有這個分頁時，寫入時會再報錯 */ }
+  try { touch(this.mainSheet(this.orderingTabName()), [1, 2]); } catch (e) { /* 同上 */ }
+  try { touch(this.popwSheet(), [SHEETS_COL.E, SHEETS_COL.F]); } catch (e) { /* 同上 */ }
+  var orig = this.originalsSheet();
+  if (orig) { touch(orig, [1]); this.savedData(); }
 };
 
 SheetsSession.prototype.formatDate = function (v) {
@@ -185,8 +214,7 @@ SheetsSession.prototype.context = function (order) {
           if (!ref) continue;
           var row = self.findRow(ref, code, 1);
           if (row) {
-            var vals = ref.sheet.getRange(row, 1, 1, 15).getValues()[0];
-            return { file: ref.file, tab: ref.tab, row: row, L: vals[11], O: vals[14], C: vals[2] };
+            return { file: ref.file, tab: ref.tab, row: row, L: self.columnValues(ref, SHEETS_COL.L)[row - 1], O: self.columnValues(ref, SHEETS_COL.O)[row - 1], C: self.columnValues(ref, SHEETS_COL.C)[row - 1] };
           }
         }
       }
@@ -236,7 +264,7 @@ SheetsSession.prototype.remember = function (ref, row, values) {
     var arr = this.columns[sheetKey + '|' + col];
     if (arr) { while (arr.length < row) arr.push(''); arr[row - 1] = values[letter]; }
     if (block && col <= SHEETS_BLOCK_COLS) {
-      while (block.length < row) block.push(['', '', '', '', '', '']);
+      while (block.length < row) block.push(new Array(SHEETS_BLOCK_COLS).fill(''));
       block[row - 1][col - 1] = values[letter];
     }
   }, this);
@@ -304,33 +332,64 @@ function sheetsToDate_(s) {
   return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : s;
 }
 
-function sheetsEnsureRows_(sheet, row) {
-  var max = sheet.getMaxRows();
-  if (row > max) sheet.insertRowsAfter(max, row - max);
-}
+// ---- 寫入 ----
+// 試算表很大（預購、訂貨每一列都有 VLOOKUP／SUMIF），寫入之後只要再讀任何東西，Google 就得先把整份重算一次。
+// 所以寫入前先一次讀好需要的東西（範本列的公式、格式、總列數），寫入時只寫不讀。
 
-// 從上面最近一列有公式的地方，把公式（相對位置）複製到這一列；這一格已經有內容就不動
-function sheetsCopyFormulaFromAbove_(sheet, row, col) {
-  var target = sheet.getRange(row, col);
-  if (target.getFormula() || (target.getValue() !== '' && target.getValue() !== null)) return;
-  for (var r = row - 1; r >= Math.max(1, row - 30); r--) {
-    var f = sheet.getRange(r, col).getFormulaR1C1();
-    if (f) { target.setFormulaR1C1(f); return; }
+var SHEETS_TEMPLATE_COLS = 17; // A～Q
+
+SheetsSession.prototype.sheetKeyOf = function (ref) {
+  return (ref.book.getId ? ref.book.getId() : '') + '|' + ref.sheet.getName();
+};
+
+// 範本：最後一筆資料往上 30 列內，每一欄最近的公式（R1C1，相對位置）、最後一筆資料那一列的數字格式、總列數、連結
+SheetsSession.prototype.template = function (ref) {
+  var key = this.sheetKeyOf(ref);
+  this.templates = this.templates || {};
+  if (this.templates[key]) return this.templates[key];
+  var sheet = ref.sheet;
+  var last = (this.lastRows && this.lastRows[key]) || sheet.getLastRow();
+  var width = Math.min(SHEETS_TEMPLATE_COLS, sheet.getMaxColumns ? sheet.getMaxColumns() : SHEETS_TEMPLATE_COLS);
+  var formulas = [], formats = [];
+  if (last >= 2) {
+    var start = Math.max(2, last - 29);
+    var block = sheet.getRange(start, 1, last - start + 1, width).getFormulasR1C1();
+    for (var c = 0; c < width; c++) {
+      for (var r = block.length - 1; r >= 0; r--) { if (block[r][c]) { formulas[c + 1] = block[r][c]; break; } }
+    }
+    sheet.getRange(last, 1, 1, width).getNumberFormats()[0].forEach(function (f, i) { formats[i + 1] = f; });
+  }
+  this.templates[key] = {
+    formulas: formulas, formats: formats, maxRows: sheet.getMaxRows(),
+    url: ref.book.getUrl() + '#gid=' + sheet.getSheetId() + '&range=A'
+  };
+  return this.templates[key];
+};
+
+// 寫入前把這張單會用到的範本都讀好
+SheetsSession.prototype.prefetch = function (plan) {
+  plan.actions.forEach(function (a) {
+    if (!a.skip && a.target) this.template(this.refFor(a.target));
+  }, this);
+};
+
+function sheetsEnsureRows_(sheet, row, tpl) {
+  if (row > tpl.maxRows) {
+    sheet.insertRowsAfter(tpl.maxRows, row - tpl.maxRows);
+    tpl.maxRows = row;
   }
 }
 
-function sheetsCopyNumberFormat_(sheet, row, cols) {
-  if (row <= 2) return;
-  cols.forEach(function (c) {
-    var fmt = sheet.getRange(row - 1, c).getNumberFormat();
-    if (fmt) sheet.getRange(row, c).setNumberFormat(fmt);
-  });
+function sheetsFormulas_(sheet, row, cols, tpl) {
+  cols.forEach(function (c) { if (tpl.formulas[c]) sheet.getRange(row, c).setFormulaR1C1(tpl.formulas[c]); });
+}
+
+function sheetsFormats_(sheet, row, cols, tpl) {
+  cols.forEach(function (c) { if (tpl.formats[c]) sheet.getRange(row, c).setNumberFormat(tpl.formats[c]); });
 }
 
 function sheetsMerge_(sheet, row, col, width) {
-  var range = sheet.getRange(row, col, 1, width);
-  if (range.isPartOfMerge && range.isPartOfMerge()) return;
-  try { range.merge(); } catch (e) { /* 合併失敗不影響資料 */ }
+  try { sheet.getRange(row, col, 1, width).merge(); } catch (e) { /* 已經合併過或合併失敗都不影響資料 */ }
 }
 
 // 相鄰的欄位一次寫入
@@ -361,74 +420,75 @@ SheetsSession.prototype.execute = function (plan) {
   var self = this;
   var settings = this.settings;
   var written = [];
+  this.prefetch(plan);
   plan.actions.forEach(function (a) {
     if (a.skip || !a.target) return;
     var ref = self.refFor(a.target);
     var sheet = ref.sheet;
+    var tpl = self.template(ref);
     var row = a.target.row;
     if (a.op === 'appendShipped') {
-      sheetsEnsureRows_(sheet, row);
-      var vals = Object.assign({}, a.values, { B: sheetsToDate_(a.values.B) });
-      sheetsSetValues_(sheet, row, vals);
+      sheetsEnsureRows_(sheet, row, tpl);
+      sheetsSetValues_(sheet, row, Object.assign({}, a.values, { B: sheetsToDate_(a.values.B) }));
       sheetsMerge_(sheet, row, SHEETS_COL.D, 4);
-      sheetsCopyNumberFormat_(sheet, row, [SHEETS_COL.B, SHEETS_COL.K, SHEETS_COL.L, SHEETS_COL.N, SHEETS_COL.O]);
+      sheetsFormats_(sheet, row, [SHEETS_COL.B, SHEETS_COL.K, SHEETS_COL.L, SHEETS_COL.N, SHEETS_COL.O], tpl);
       sheet.getRange(row, SHEETS_COL.M).setBackground((a.colors && a.colors.M) || settings.M_DEFAULT_COLOR || RULES_COLORS.yellow);
-      self.remember(ref, row, { A: a.values.A, B: a.values.B, C: a.values.C, D: a.values.D });
+      self.remember(ref, row, a.values);
     } else if (a.op === 'appendPreorder') {
-      sheetsEnsureRows_(sheet, row);
-      var pv = Object.assign({}, a.values, { C: sheetsToDate_(a.values.C) });
-      sheetsSetValues_(sheet, row, pv);
+      sheetsEnsureRows_(sheet, row, tpl);
+      sheetsSetValues_(sheet, row, Object.assign({}, a.values, { C: sheetsToDate_(a.values.C) }));
       sheetsMerge_(sheet, row, SHEETS_COL.D, 5);
-      sheetsCopyNumberFormat_(sheet, row, [SHEETS_COL.C, SHEETS_COL.M, SHEETS_COL.N]);
-      sheetsCopyFormulaFromAbove_(sheet, row, SHEETS_COL.J);
-      sheetsCopyFormulaFromAbove_(sheet, row, SHEETS_COL.K);
+      sheetsFormats_(sheet, row, [SHEETS_COL.C, SHEETS_COL.M, SHEETS_COL.N], tpl);
+      sheetsFormulas_(sheet, row, [SHEETS_COL.J, SHEETS_COL.K], tpl);
       if (a.deposit) sheet.getRange(row, SHEETS_COL.O).setFormula('=M' + row + '*L' + row + '-N' + row);
       else sheet.getRange(row, SHEETS_COL.O).setValue('---');
       if (a.colors && a.colors.B) sheet.getRange(row, SHEETS_COL.B).setBackground(a.colors.B);
-      self.remember(ref, row, { A: a.values.A, C: a.values.C, D: a.values.D });
-      if (self._pre) self._pre.values[row - 1] = [a.values.A, a.values.B, a.values.C, a.values.D, '', '', '', '', a.values.I, '', '', a.values.L, a.values.M, a.values.N, ''];
+      self.remember(ref, row, a.values);
+      if (self._pre) {
+        self._pre.values[row - 1] = [a.values.A, a.values.B, a.values.C, a.values.D, '', '', '', '', a.values.I, '', '', a.values.L, a.values.M, a.values.N, ''];
+        self._pre.nFormulas[row - 1] = [''];
+      }
     } else if (a.op === 'appendPW') {
-      sheetsEnsureRows_(sheet, row);
+      sheetsEnsureRows_(sheet, row, tpl);
       sheetsSetValues_(sheet, row, Object.assign({}, a.values, { D: sheetsToDate_(a.values.D) }));
-      sheetsCopyNumberFormat_(sheet, row, [SHEETS_COL.D]);
-      [SHEETS_COL.H, SHEETS_COL.L, SHEETS_COL.M, SHEETS_COL.P, SHEETS_COL.Q].forEach(function (c) { sheetsCopyFormulaFromAbove_(sheet, row, c); });
+      sheetsFormats_(sheet, row, [SHEETS_COL.D], tpl);
+      sheetsFormulas_(sheet, row, [SHEETS_COL.H, SHEETS_COL.L, SHEETS_COL.M, SHEETS_COL.P, SHEETS_COL.Q], tpl);
       if (a.colors && a.colors.C) sheet.getRange(row, SHEETS_COL.C).setBackground(a.colors.C);
-      self.remember(ref, row, { E: a.values.E, F: a.values.F });
+      self.remember(ref, row, a.values);
     } else if (a.op === 'ensureOrdering') {
-      sheetsEnsureRows_(sheet, row);
+      sheetsEnsureRows_(sheet, row, tpl);
       sheetsSetValues_(sheet, row, Object.assign({}, a.values, { C: a.values.C ? sheetsToDate_(a.values.C) : '' }));
-      sheetsCopyNumberFormat_(sheet, row, [SHEETS_COL.C]);
-      sheetsCopyFormulaFromAbove_(sheet, row, SHEETS_COL.D);
-      sheetsCopyFormulaFromAbove_(sheet, row, SHEETS_COL.E);
-      self.remember(ref, row, { A: a.values.A, B: a.values.B });
+      sheetsFormats_(sheet, row, [SHEETS_COL.C], tpl);
+      sheetsFormulas_(sheet, row, [SHEETS_COL.D, SHEETS_COL.E], tpl);
+      self.remember(ref, row, a.values);
     } else if (a.op === 'saveOriginal') {
+      sheetsEnsureRows_(sheet, row, tpl);
       sheetsSetValues_(sheet, row, Object.assign({}, a.values, { F: sheetsToDate_(a.values.F) }));
-      self.remember(ref, row, { A: a.values.A });
+      self.remember(ref, row, a.values);
       self.savedData()[a.key.toUpperCase()] = { extras: a.values.C, fee: a.values.D, prepaid: a.values.E };
     } else if (a.op === 'updatePreorder') {
       var found = self.findRow(ref, a.key, 1);
       if (found !== row) throw new Error(a.key + '：預購表的列號變了（原本第 ' + row + ' 列），請重新預覽。');
       sheet.getRange(row, SHEETS_COL.B).setValue('Y');
+      var pre = self.preorderData();
       if (a.addPaid) {
-        var nCell = sheet.getRange(row, SHEETS_COL.N);
-        var f = sheetsNewPaidFormula_(nCell.getFormula() || nCell.getValue(), a.addPaid);
-        if (typeof f === 'string') nCell.setFormula(f); else nCell.setValue(f);
+        var current = (pre.nFormulas[row - 1] && pre.nFormulas[row - 1][0]) || (pre.values[row - 1] ? pre.values[row - 1][13] : '');
+        var f = sheetsNewPaidFormula_(current, a.addPaid);
+        if (typeof f === 'string') sheet.getRange(row, SHEETS_COL.N).setFormula(f); else sheet.getRange(row, SHEETS_COL.N).setValue(f);
+        pre.nFormulas[row - 1] = [typeof f === 'string' ? f : ''];
       }
       sheet.getRange(row, 1, 1, 15).setBackground(a.rowColor);
-      if (self._pre && self._pre.values[row - 1]) {
-        self._pre.values[row - 1][1] = 'Y';
-        self._pre.values[row - 1][13] = a.paidAfter;
-        self._pre.nFormulas[row - 1] = [''];
+      if (pre.values[row - 1]) {
+        pre.values[row - 1][1] = 'Y';
+        pre.values[row - 1][13] = a.paidAfter;
       }
     } else if (a.op === 'updateShipped') {
       var check = self.findRow(ref, a.key, 1);
       if (check !== row) throw new Error(a.key + '：已出貨表的列號變了（原本第 ' + row + ' 列），請重新預覽。');
       sheetsSetValues_(sheet, row, a.set);
+      self.remember(ref, row, a.set);
     }
-    written.push({
-      label: a.label, key: a.key, tab: sheet.getName(), row: row,
-      url: ref.book.getUrl() + '#gid=' + sheet.getSheetId() + '&range=A' + row
-    });
+    written.push({ label: a.label, key: a.key, tab: sheet.getName(), row: row, url: tpl.url + row });
   });
   return written;
 };
