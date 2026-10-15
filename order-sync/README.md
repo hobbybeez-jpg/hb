@@ -83,7 +83,7 @@ N 欄（原單手續費）留空、原單的保險不會自動加到 L 欄，預
 | M Shipping Cost | 線上寄送：第一項留空（之後填實際運費），第二項起 0、灰色；自取：每項 0、青色；PW：每項留空、橘色；POS：0 |
 | N Platform Fee | 第一項＝手續費（Shopify Payments 的 fees 或 PayPal receipt 裡的 fee，現金 0）；有預購的混合單按已付金額比例只算現貨部分 |
 | INT | 要等客人付完運費 invoice（不是 partially paid）才處理；N＝第一筆付款的手續費，O＝補運費那筆的手續費 |
-| PW | 已出貨照常記（M 橘色），另外在 PW/PO 的 POPW 分頁新增：C=`PW`（灰底）、D=訂單日期、E 單號、F 品名、G UPC、I 數量、J email，H/L/M/P/Q 公式從上一列複製 |
+| PW | 已出貨照常記（M 橘色），另外在 PW/PO 的「PO/PW」分頁新增：C=`PW`（灰底）、D=訂單日期、E 單號、F 品名、G UPC、I 數量、J email，H/L/M/P/Q 公式從上一列複製 |
 | 預購 | 只記在「預購」分頁：A 單號、B（backorder＝`backorder`；只有預購而且有付運費＝`shipping paid` 藍底）、C 日期、D 品名（去掉款式和 [Backorder]）、I UPC、L 數量、M 單價應付、N 已付總額。訂金：M＝訂金×5−0.01（不是 .99 結尾會警告）。有折扣時 M 和 N 都扣。J、K 公式從上一列複製；O＝訂金 `=M*L-N`，全額 `---` |
 | 訂貨 | 預購/backorder 的 UPC 在「訂貨」B 欄找不到時，在最後一筆資料下面新增 A 品名、B UPC、C Pre-Order Deadline（從商品敘述 `Pre-Order Deadline: 2026-10-23` 讀） |
 | 不記錄 | Gift Card、Coin Exchange、Transaction Fee、Cancellation Fee、Duties，會在預覽裡列出 |
@@ -97,7 +97,7 @@ N 欄（原單手續費）留空、原單的保險不會自動加到 L 欄，預
     A 原單號、B 原單日期、C `PO-Shopify`（原本是 backorder 寫 `Shopify`）、D 品名、J 數量、K 應付總額、
     L 第一項＝出貨單運費＋服務費，再加上原單沒記過的保險／運費（原單只有預購、而且這是原單第一個出貨的商品才加）、
     M 規則同上、N 原單手續費（按這個商品在原單的已付金額比例）、O 第一項＝出貨單的手續費。
-- **PW 存放的現貨出貨**（已出貨找得到這個單號）：不新增列，改原本那一列：L 加上出貨單運費＋服務費、O＝出貨單手續費（只改第一項）。POPW 分頁的標記人工處理。
+- **PW 存放的現貨出貨**（已出貨找得到這個單號）：不新增列，改原本那一列：L 加上出貨單運費＋服務費、O＝出貨單手續費（只改第一項）。PW/PO 試算表那一列的標記人工處理。
 - 兩邊都找不到 → 錯誤，不寫入。
 
 ## 已知和過去人工紀錄不同的地方
