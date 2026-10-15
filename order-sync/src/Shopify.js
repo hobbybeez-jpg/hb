@@ -28,9 +28,11 @@ function shopifyConfig_() {
   var props = PropertiesService.getScriptProperties();
   var store = String(settings.SHOPIFY_STORE || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
   if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(store)) throw new Error('「設定」分頁的 SHOPIFY_STORE 要填 你的商店.myshopify.com');
+  var version = String(settings.SHOPIFY_API_VERSION || '2026-07').trim();
+  if (!/^(\d{4}-\d{2}|unstable)$/.test(version)) throw new Error('「設定」分頁的 SHOPIFY_API_VERSION 要像 2026-07（現在是「' + version + '」）。清空這一格就會用預設值。');
   return {
     store: store,
-    version: String(settings.SHOPIFY_API_VERSION || '2026-07').trim(),
+    version: version,
     adminToken: props.getProperty('SHOPIFY_ADMIN_TOKEN') || '',
     clientId: props.getProperty('SHOPIFY_CLIENT_ID') || '',
     clientSecret: props.getProperty('SHOPIFY_CLIENT_SECRET') || ''

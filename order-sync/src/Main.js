@@ -38,6 +38,8 @@ function setupTabs() {
   SETTINGS_DEFAULTS.forEach(function (d) {
     if (existing.indexOf(d[0]) < 0) s.appendRow(d);
   });
+  // 值一律當文字，避免 2026-07 被轉成日期
+  s.getRange(2, 2, Math.max(s.getLastRow() - 1, 1), 1).setNumberFormat('@');
   s.setColumnWidth(1, 180); s.setColumnWidth(2, 360); s.setColumnWidth(3, 520);
   var log = book.getSheetByName(LOG_TAB) || book.insertSheet(LOG_TAB);
   if (log.getLastRow() === 0) {
@@ -52,9 +54,15 @@ function getSettings() {
   SETTINGS_DEFAULTS.forEach(function (d) { out[d[0]] = d[1]; });
   var s = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SETTINGS_TAB);
   if (!s || s.getLastRow() < 2) return out;
+  var tz = Session.getScriptTimeZone();
   s.getRange(2, 1, s.getLastRow() - 1, 2).getValues().forEach(function (r) {
     var key = String(r[0] || '').trim();
-    if (key) out[key] = String(r[1] == null ? '' : r[1]).trim();
+    if (!key) return;
+    var v = r[1];
+    // 試算表會把 2026-07 自動轉成日期
+    if (v instanceof Date) v = Utilities.formatDate(v, tz, key === 'SHOPIFY_API_VERSION' ? 'yyyy-MM' : 'yyyy-MM-dd');
+    v = String(v == null ? '' : v).trim();
+    if (v !== '') out[key] = v;
   });
   // 允許直接貼整個網址
   Object.keys(out).forEach(function (k) {
