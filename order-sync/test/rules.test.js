@@ -315,6 +315,22 @@ test('現貨＋預購混合，原單有保險：現貨那一列只記運費，�
   assert.equal(r.values.N, Math.round(6 * 62.5 / 199.99 * 100) / 100);
 });
 
+test('POPW：PW 商品出貨，已出貨那一列 L 欄已經有運費 → 已登記', () => {
+  const ctx = ctxWith({ shipped: { 'CA52471D': { file: 'main', tab: '2026已出貨 CA', row: 10100, L: 19.99, O: 0.8 } } });
+  const p = planOrder(draft({ shippingCharged: 14.99, lines: [popwLine('CA52471D', 'X', '1', 0)] }), ctx);
+  assert.equal(classifyPlan(p), 'done');
+  assert.equal(ops(p, 'updateShipped').length, 0);
+  // 只有保險（$5 < 運費 $14.99）→ 還沒處理
+  const ctx2 = ctxWith({ shipped: { 'CA52471D': { file: 'main', tab: '2026已出貨 CA', row: 10100, L: 5, O: 0 } } });
+  const p2 = planOrder(draft({ shippingCharged: 14.99, lines: [popwLine('CA52471D', 'X', '1', 0)] }), ctx2);
+  assert.equal(ops(p2, 'updateShipped')[0].set.L, 19.99);
+});
+
+test('POPW：清單摘要列出原單號', () => {
+  const ctx = ctxWith({ preorders: { CA1D: { row: 5, B: '', C: '2026-03-01', D: 'X', I: 1, L: 1, M: 100, N: 100, Nvalue: 100 } } });
+  assert.match(planOrder(draft({ lines: [popwLine('CA1D', 'X', '1', 0)] }), ctx).summary, /POPW 出貨 1 項（CA1D）/);
+});
+
 test('POPW：PW 存放的現貨出貨 → 修改原本已出貨那一列的 L 和 O', () => {
   const ctx = ctxWith({ shipped: { 'CA52681D-1': { file: 'main', tab: '2026已出貨 CA', row: 10250, L: 0, O: 0 }, 'CA52681D-2': { file: 'main', tab: '2026已出貨 CA', row: 10251, L: 0, O: 0 } } });
   const p = planOrder(draft({ payments: [{ createdAt: 'x', gateway: 'paypal', amount: 16.79, fee: 0.79 }], lines: [popwLine('CA52681D-1', 'Gen', '1', 0), popwLine('CA52681D-2', 'Sonic', '2', 0)] }), ctx);
@@ -338,10 +354,12 @@ test('POPW：自取 → M=0 青色；Duties 不記', () => {
 // ---- 批次清單的狀態 ----
 
 test('classifyPlan：已登記／部分已登記／錯誤／需確認／可寫入／不用記錄', () => {
-  const a = (op) => ({ op });
-  assert.equal(classifyPlan({ actions: [a('appendShipped'), a('appendShipped')], errors: ['d1', 'd2'], warnings: [], duplicates: ['x-1', 'x-2'] }), 'done');
-  assert.equal(classifyPlan({ actions: [a('appendShipped'), a('appendPreorder')], errors: ['d1'], warnings: [], duplicates: ['x-1'] }), 'partial');
-  assert.equal(classifyPlan({ actions: [a('appendShipped')], errors: ['d1', 'other'], warnings: [], duplicates: ['x'] }), 'partial');
+  const a = (op, key) => ({ op, key });
+  assert.equal(classifyPlan({ actions: [a('appendShipped', 'x-1'), a('appendShipped', 'x-2')], errors: ['d1', 'd2'], warnings: [], duplicates: ['x-1', 'x-2'] }), 'done');
+  assert.equal(classifyPlan({ actions: [a('appendShipped', 'x-1'), a('appendPreorder', 'x-2')], errors: ['d1'], warnings: [], duplicates: ['x-1'] }), 'partial');
+  assert.equal(classifyPlan({ actions: [a('appendShipped', 'x')], errors: ['d1', 'other'], warnings: [], duplicates: ['x'] }), 'partial');
+  // POPW：已出貨那一列已存在，預購表的修改也算已處理
+  assert.equal(classifyPlan({ actions: [a('appendShipped', 'y'), a('updatePreorder', 'y')], errors: ['d'], warnings: [], duplicates: ['y'] }), 'done');
   assert.equal(classifyPlan({ actions: [], errors: ['INT 還沒付清'], warnings: [] }), 'error');
   assert.equal(classifyPlan({ actions: [a('appendShipped')], errors: [], warnings: ['w'] }), 'warn');
   assert.equal(classifyPlan({ actions: [a('appendShipped')], errors: [], warnings: [] }), 'ready');
@@ -374,4 +392,57 @@ test('POPW：控制台有原單資料時直接用（原單超過 60 天也可以
   const r = ops(p, 'appendShipped')[0];
   assert.deepEqual([r.values.L, r.values.N], [17.49, 0.9]);
   assert.ok(!p.warnings.some((w) => /讀不到原單/.test(w)));
+});
+
+// ---- POPW 出貨單裡另外加了現貨 ----
+
+test('POPW 出貨單加了現貨：現貨用出貨單單號記錄（運費、手續費記在現貨），POPW 那一列 L、O 是 0、M 灰色', () => {
+  const ctx = ctxWith({ preorders: { CA42485D: { row: 5, B: '', C: '2026-03-02', D: 'Niformation', I: 1, L: 1, M: 149.99, N: 149.99, Nvalue: 149.99 } } });
+  const p = planOrder(draft({ name: 'CA52878D', shippingCharged: 14.99, payments: [{ createdAt: 'x', gateway: 'shopify_payments', amount: 172, fee: 4.85 }],
+    lines: [popwLine('CA42485D', 'Niformation', '1', 0), line('Mega Cat Project One Piece Nyan Pie', 139.99, { sku: '4535123848902' })] }), ctx);
+  assert.deepEqual(p.errors, []);
+  const rows = ops(p, 'appendShipped');
+  assert.deepEqual(rows.map((r) => r.values.A), ['CA52878D', 'CA42485D']);
+  assert.deepEqual([rows[0].values.C, rows[0].values.K, rows[0].values.L, rows[0].values.N], ['Shopify', 139.99, 14.99, 4.85]);
+  assert.deepEqual([rows[1].values.L, rows[1].values.O, rows[1].values.M, rows[1].colors.M], [0, 0, 0, '#cccccc']);
+});
+
+test('POPW 出貨單只有 POPW 商品：出貨單單號本身不記錄', () => {
+  const ctx = ctxWith({ preorders: { CA1D: { row: 5, B: '', C: '2026-03-01', D: 'X', I: 1, L: 1, M: 100, N: 100, Nvalue: 100 } } });
+  const p = planOrder(draft({ name: 'CA52999D', lines: [popwLine('CA1D', 'X', '1', 0)] }), ctx);
+  assert.ok(!ops(p, 'appendShipped').some((r) => r.values.A === 'CA52999D'));
+});
+
+test('POPW：商品名稱用空格隔開（「CA39736D 品名」）也認得', () => {
+  const ctx = ctxWith({ preorders: { CA39736D: { row: 5, B: '', C: '2025-11-01', D: 'Tamaki', I: 1, L: 1, M: 79.99, N: 16, Nvalue: 16 } } });
+  const p = planOrder(draft({ lines: [line('CA39736D Nendoroid No.2104 Tamaki Suou', 63.99, { sku: '' }), line('Private Warehouse Storage Fee', 2, { sku: '', requiresShipping: false })] }), ctx);
+  assert.deepEqual(p.errors, []);
+  const r = ops(p, 'appendShipped')[0];
+  assert.deepEqual([r.values.A, r.values.L], ['CA39736D', 16.99]);
+  assert.equal(ops(p, 'updatePreorder')[0].paidAfter, 79.99);
+});
+
+test('「Prepaid Duties (US)」不記錄', () => {
+  const ctx = ctxWith({ preorders: { CA47611D: { row: 5, B: '', C: '2026-06-21', D: 'Rapi', I: 1, L: 1, M: 309.99, N: 309.99, Nvalue: 309.99 } } });
+  const p = planOrder(draft({ shippingCharged: 24.99, lines: [popwLine('CA47611D', 'Rapi', '1', 0), line('Prepaid Duties (US)', 31, { sku: '', requiresShipping: false })] }), ctx);
+  assert.deepEqual(ops(p, 'appendShipped').map((r) => [r.values.A, r.values.L]), [['CA47611D', 24.99]]);
+});
+
+test('POPW：PW／現貨商品自取出貨，沒有運費也沒有手續費 → 原本那一列不用改，算已登記（CA52841D）', () => {
+  const ctx = ctxWith({ shipped: { CA50480D: { file: 'main', tab: '2026已出貨 CA', row: 8498, L: 0, O: 0 } } });
+  const p = planOrder(draft({ name: 'CA52841D', shippingTitle: 'Vancouver (Renfrew)', shippingCharged: 0, payments: [],
+    lines: [popwLine('CA50480D', 'HG 1/100 YF-19 WATER DECALS', '4573102642592', 0)] }), ctx);
+  assert.equal(classifyPlan(p), 'done');
+  assert.equal(ops(p, 'updateShipped').length, 0);
+});
+
+test('任何關稅收費都不記錄；名稱有 Duty 但有 SKU 的商品照常記錄', () => {
+  const fee = (n) => line(n, 10, { sku: '', requiresShipping: false });
+  for (const n of ['Duties (US)', 'Prepaid Duties (US)', 'Import Duty', 'US duties', '關稅']) {
+    const p = planOrder(order({ lines: [line('Figure', 50), fee(n)] }));
+    assert.equal(ops(p, 'appendShipped')[0].values.L, 14.99, n);
+    assert.ok(p.notes.some((x) => x.includes(n)), n);
+  }
+  const cod = planOrder(order({ lines: [line('Call of Duty Ghost Figure', 80, { sku: '4900000000001' })] }));
+  assert.equal(ops(cod, 'appendShipped')[0].values.D, 'Call of Duty Ghost Figure');
 });

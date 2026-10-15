@@ -94,14 +94,9 @@ function shopifyCleanName(name) {
 function shopifyFetchOrderRaw(name) {
   var clean = shopifyCleanName(name);
   if (!/^[A-Z0-9-]+$/.test(clean)) throw new Error('單號格式不對：' + name);
-  var queries = ['name:"#' + clean + '"', 'name:' + clean];
-  for (var i = 0; i < queries.length; i++) {
-    var data = shopifyGraphql(SHOPIFY_ORDER_QUERY, { q: queries[i] });
-    var nodes = (data.orders && data.orders.nodes) || [];
-    var hit = nodes.filter(function (n) { return shopifyCleanName(n.name) === clean; })[0];
-    if (hit) return hit;
-  }
-  return null;
+  var data = shopifyGraphql(SHOPIFY_ORDER_QUERY, { q: 'name:"#' + clean + '"' });
+  var nodes = (data.orders && data.orders.nodes) || [];
+  return nodes.filter(function (n) { return shopifyCleanName(n.name) === clean; })[0] || null;
 }
 
 function shopifyFetchOrder(name) {

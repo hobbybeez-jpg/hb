@@ -24,7 +24,9 @@ var RULES_COLORS = {
 var RULES_RE = {
   service: /Damage\s*&\s*Loss Insurance|Gift Wrapping|Private Warehouse Storage Fee/i,
   shippingLike: /shipping/i,
-  skip: /^Gift Card\b|Coin Exchange|^Transaction Fee$|^Cancellation Fee$|^Duties\b/i,
+  skip: /^Gift Card\b|Coin Exchange|^Transaction Fee$|^Cancellation Fee$/i,
+  // 關稅（Duties (US)、Prepaid Duties (US)…）：只看沒有 SKU／Barcode 的自訂收費，避免排除名稱剛好有 Duty 的商品
+  duties: /\bdut(y|ies)\b|關稅/i,
   preorder: /\s+-\s+(Pay in full(?:\s*\([^)]*\))?|Pay a 20% non-refundable deposit)\s*$/i,
   deposit: /Pay a 20% non-refundable deposit\s*$/i,
   backorder: /^\s*\[backorder\]\s*/i,
@@ -68,8 +70,10 @@ function rulesUpcCell(v) {
 function classifyLine(line, order) {
   var name = String(line.name || '');
   if (rulesNum(line.qty) <= 0) return 'removed';
-  if (order.source === 'shopify_draft_order' && RULES_RE.popwLine.test(name) && /\t/.test(name)) return 'popw';
+  // POPW 出貨單的商品：「CA46701D⇥品名⇥(UPC)⇥日期」，有時是「CA39736D 品名」（空格）
+  if (order.source === 'shopify_draft_order' && RULES_RE.popwLine.test(name)) return 'popw';
   if (RULES_RE.skip.test(name)) return 'skip';
+  if (!line.sku && !line.barcode && RULES_RE.duties.test(name)) return 'skip';
   if (RULES_RE.service.test(name)) return 'service';
   if (!line.sku && !line.barcode && RULES_RE.shippingLike.test(name)) return 'service';
   if (RULES_RE.backorder.test(name)) return 'backorder';
@@ -212,7 +216,9 @@ function planOrder(order, ctx, options) {
   var parts = [];
   if (facts.stock.length) parts.push('現貨 ' + facts.stock.length + ' 項');
   if (facts.pre.length) parts.push('預購/backorder ' + facts.pre.length + ' 項');
-  if (facts.popw.length) parts.push('POPW 出貨 ' + facts.popw.length + ' 項');
+  if (facts.popw.length) {
+    parts.push('POPW 出貨 ' + facts.popw.length + ' 項（' + facts.popw.map(function (l) { return RULES_RE.popwLine.exec(l.name)[1].toUpperCase(); }).join('、') + '）');
+  }
   if (facts.isPW) parts.push('存放 PW');
   if (facts.isPickup) parts.push('自取');
   if (facts.region === 'INT') parts.push('INT');
@@ -346,13 +352,24 @@ function planNewOrder(order, facts, ctx, plan) {
 
 // POPW 出貨單：Draft 單，商品名稱是「CA46701D⇥品名⇥(UPC)⇥日期」
 function planPopw(order, facts, ctx, plan, options) {
-  var draftExtra = rulesRound2(facts.shipping + facts.servicesTotal);
-  var draftFee = facts.fees.unknown.length ? '' : facts.fees.total;
+  // 出貨單裡另外加了現貨：現貨用出貨單的單號記錄（和一般訂單一樣），出貨單的運費、手續費記在現貨那一列，POPW 那幾列不記
+  var chargesOnStock = facts.stock.length > 0;
+  if (chargesOnStock) {
+    if (facts.pre.length) {
+      facts.pre.forEach(function (l) { plan.errors.push('出貨單裡有預購商品「' + l.name + '」，請手動處理。'); });
+      return;
+    }
+    planNewOrder(order, facts, ctx, plan);
+  }
+  var draftExtra = chargesOnStock ? 0 : rulesRound2(facts.shipping + facts.servicesTotal);
+  var draftFee = chargesOnStock ? 0 : (facts.fees.unknown.length ? '' : facts.fees.total);
   var popwRegion = facts.region;
   var originalsCharged = {};
-  facts.stock.concat(facts.pre).forEach(function (l) {
-    plan.warnings.push('出貨單裡有不是「CA單號⇥品名」格式的商品：「' + l.name + '」，沒有記錄，請手動處理。');
-  });
+  if (!chargesOnStock) {
+    facts.pre.forEach(function (l) {
+      plan.warnings.push('出貨單裡有不是「CA單號 品名」格式的商品：「' + l.name + '」，沒有記錄，請手動處理。');
+    });
+  }
 
   // 同一張原單的商品照編號從小到大寫入（CA42482D-1、-2、-3…）；不同原單照出貨單上的先後。運費和手續費記在第一項
   var firstSeen = {};
@@ -439,7 +456,7 @@ function planPopw(order, facts, ctx, plan, options) {
       };
       var colors = {};
       if (facts.isPickup) { values.M = 0; colors.M = RULES_COLORS.cyan; }
-      else if (!first) { values.M = 0; colors.M = RULES_COLORS.gray; }
+      else if (!first || chargesOnStock) { values.M = 0; colors.M = RULES_COLORS.gray; }
       else values.M = '';
       plan.actions.push({
         op: 'appendShipped', year: year, region: popwRegion, key: code,
@@ -468,6 +485,20 @@ function planPopw(order, facts, ctx, plan, options) {
         return;
       }
       var oldL = rulesNum(shipped.L);
+      // 出貨單沒有運費也沒有手續費要加（例如自取）→ 原本那一列不用改，算已登記
+      if (!draftExtra && !rulesNum(draftFee)) {
+        plan.duplicates = plan.duplicates || [];
+        plan.duplicates.push(code);
+        plan.errors.push(code + ' 已經記錄在「' + shipped.tab + '」第 ' + shipped.row + ' 列（出貨單沒有運費和手續費要加）。');
+        return;
+      }
+      // L 欄已經有出貨單的運費（PW 存放時 L 是 0 或只有保險）→ 應該已經處理過
+      if (draftExtra > 0 && oldL >= draftExtra) {
+        plan.duplicates = plan.duplicates || [];
+        plan.duplicates.push(code);
+        plan.errors.push(code + ' 已經記錄在「' + shipped.tab + '」第 ' + shipped.row + ' 列（L 欄已經有 $' + oldL + '，出貨單運費 $' + draftExtra + '）。');
+        return;
+      }
       if (oldL) plan.warnings.push(code + '：已出貨表 L 欄原本是 $' + oldL + '，會加上出貨單的 $' + draftExtra + '。');
       if (rulesNum(shipped.O)) plan.warnings.push(code + '：已出貨表 O 欄原本是 $' + shipped.O + '，會改成出貨單的手續費。');
       plan.actions.push({
@@ -491,10 +522,13 @@ function planPopw(order, facts, ctx, plan, options) {
 function classifyPlan(plan) {
   if (plan.waiting) return 'waiting';
   var dups = plan.duplicates || [];
-  var appends = plan.actions.filter(function (a) { return /^append/.test(a.op); });
   if (dups.length) {
+    // 還有沒登記過的列要寫 → 部分已登記
+    var remaining = plan.actions.filter(function (a) {
+      return /^(appendShipped|appendPreorder|appendPW|updatePreorder|updateShipped)$/.test(a.op) && dups.indexOf(a.key) < 0;
+    });
     var others = plan.errors.length - dups.length;
-    return dups.length >= appends.length && others === 0 ? 'done' : 'partial';
+    return !remaining.length && others === 0 ? 'done' : 'partial';
   }
   if (plan.errors.length) return 'error';
   if (!plan.actions.some(function (a) { return !a.skip; })) return 'nothing';
