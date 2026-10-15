@@ -125,6 +125,33 @@ function shopifyRecentOrders(n) {
   });
 }
 
+var SHOPIFY_LIST_QUERY = 'query List($q: String!, $after: String) { orders(first: 100, after: $after, sortKey: CREATED_AT, query: $q) { nodes { name createdAt sourceName displayFinancialStatus cancelledAt test } pageInfo { hasNextPage endCursor } } }';
+
+// 某段日期（溫哥華時間，含頭尾兩天）建立的訂單，從舊到新
+function shopifyListOrders(fromDate, toDate) {
+  var tz = getSettings().TIMEZONE || 'America/Vancouver';
+  var from = Utilities.parseDate(fromDate + ' 00:00:00', tz, 'yyyy-MM-dd HH:mm:ss');
+  var to = Utilities.parseDate(toDate + ' 23:59:59', tz, 'yyyy-MM-dd HH:mm:ss');
+  if (isNaN(from.getTime()) || isNaN(to.getTime()) || from > to) throw new Error('日期範圍不對：' + fromDate + ' ～ ' + toDate);
+  if ((to - from) / 86400000 > 31) throw new Error('一次最多掃 31 天。');
+  var q = "created_at:>='" + from.toISOString() + "' created_at:<='" + to.toISOString() + "'";
+  var out = [];
+  var after = null;
+  for (var page = 0; page < 10; page++) {
+    var data = shopifyGraphql(SHOPIFY_LIST_QUERY, { q: q, after: after });
+    var conn = data.orders || { nodes: [], pageInfo: {} };
+    conn.nodes.forEach(function (o) {
+      out.push({
+        name: shopifyCleanName(o.name), createdAt: o.createdAt, source: o.sourceName,
+        status: String(o.displayFinancialStatus || '').toLowerCase(), cancelled: !!o.cancelledAt, test: !!o.test
+      });
+    });
+    if (!conn.pageInfo || !conn.pageInfo.hasNextPage) break;
+    after = conn.pageInfo.endCursor;
+  }
+  return out;
+}
+
 function shopifyMoney(set) {
   return set && set.shopMoney ? Number(set.shopMoney.amount) || 0 : 0;
 }
