@@ -1,0 +1,44 @@
+# 把 order-sync/src 推到「訂單自動化控制台」的 Apps Script。
+# main 上 order-sync 有變動時自動執行；也可以在 Actions 頁手動執行。
+# 需要兩個 repository secret（設定方式見 order-sync/README.md「自動更新」）：
+#   ORDER_SYNC_SCRIPT_ID   Apps Script 專案設定裡的「指令碼 ID」
+#   CLASPRC_JSON           clasp login 之後 ~/.clasprc.json 的內容
+name: order-sync deploy
+
+on:
+  push:
+    branches: [main]
+    paths: ['order-sync/**']
+  workflow_dispatch:
+
+concurrency:
+  group: order-sync-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test
+        working-directory: order-sync
+        run: npm test
+
+      - name: Push to Apps Script
+        env:
+          SCRIPT_ID: ${{ secrets.ORDER_SYNC_SCRIPT_ID }}
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          if [ -z "$SCRIPT_ID" ] || [ -z "$CLASPRC_JSON" ]; then
+            echo "::error::請先設定 ORDER_SYNC_SCRIPT_ID 和 CLASPRC_JSON 這兩個 secret（見 order-sync/README.md）"
+            exit 1
+          fi
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          printf '{"scriptId":"%s","rootDir":"order-sync/src"}' "$SCRIPT_ID" > .clasp.json
+          npx --yes @google/clasp@2.4.2 push --force
+          rm -f "$HOME/.clasprc.json"

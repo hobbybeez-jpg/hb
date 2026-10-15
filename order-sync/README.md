@@ -10,11 +10,11 @@
 
 ## 安裝
 
-1. **新建一個 Google Sheet**，例如「訂單自動化控制台」。
-2. 選單 **擴充功能 → Apps Script**，把 `src/` 裡的檔案逐一建立、貼上內容：
-   `Rules.js`、`Shopify.js`、`Sheets.js`、`Main.js`（在 Apps Script 建立「指令碼」檔，名稱用 `Rules` 等，副檔名會是 `.gs`）、
-   `Dialog.html`（建立「HTML」檔，名稱 `Dialog`）。
-   專案設定 → 勾選「在編輯器中顯示 appsscript.json」，把 `src/appsscript.json` 的內容貼上。
+1. **新建一個 Google Sheet**，例如「訂單自動化控制台」。選單 **擴充功能 → Apps Script** 開啟（空的專案就好）。
+2. 把程式放進去：設定好下面的「自動更新」後，到 GitHub 的 **Actions → order-sync deploy → Run workflow** 執行一次，
+   程式就會自動推上去，不用貼。
+   （不想設定自動更新的話，也可以手動把 `src/` 的檔案逐一建立貼上：`.js` 建成「指令碼」檔、`Dialog.html` 建成 HTML 檔，
+   `appsscript.json` 在專案設定勾「在編輯器中顯示 appsscript.json」後貼上。）
 3. 回到試算表重新整理，會出現選單 **訂單自動化**。按 **建立／補齊「設定」和「紀錄」分頁**（第一次會要求授權）。
 4. 在「設定」分頁填：
 
@@ -34,6 +34,25 @@
    金鑰存在 Apps Script 的指令碼屬性，不會出現在試算表裡。
 6. 用選單 **測試 Shopify 連線** 輸入一個單號，看得到訂單的原始資料就代表設定好了。
    這裡也可以檢查手續費：Shopify Payments 看 `transactions → fees`，PayPal 看 `receiptJson` 裡的 fee。
+
+## 自動更新
+
+`main` 上的 `order-sync/` 有變動時，GitHub Action（`.github/workflows/order-sync-deploy.yml`）會先跑測試，
+通過才用 [clasp](https://github.com/google/clasp) 把 `src/` 推到控制台的 Apps Script。只需要設定一次：
+
+1. 打開 <https://script.google.com/home/usersettings>，把 **Google Apps Script API** 打開。
+2. 控制台的 Apps Script → **專案設定**，複製「指令碼 ID」。
+3. 在自己的電腦（要有 Node.js）執行一次：
+   ```
+   npx @google/clasp@2.4.2 login
+   ```
+   瀏覽器登入 Google 後，會產生 `~/.clasprc.json`（Windows 在 `C:\Users\你的名字\.clasprc.json`）。
+4. GitHub repo → **Settings → Secrets and variables → Actions → New repository secret**，新增兩個：
+   - `ORDER_SYNC_SCRIPT_ID`：第 2 步的指令碼 ID
+   - `CLASPRC_JSON`：`.clasprc.json` 的整個內容
+
+注意：`CLASPRC_JSON` 等於你 Google 帳號編輯 Apps Script 的權限，只放在 GitHub secret，不要貼到別的地方。
+推上去會**覆蓋**整個 Apps Script 專案的程式（設定、金鑰、「設定」「紀錄」分頁都不受影響），所以請不要直接在 Apps Script 編輯器裡改程式，要改就改 repo。
 
 ## 使用
 
