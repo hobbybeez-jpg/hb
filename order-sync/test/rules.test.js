@@ -446,3 +446,17 @@ test('任何關稅收費都不記錄；名稱有 Duty 但有 SKU 的商品照常
   const cod = planOrder(order({ lines: [line('Call of Duty Ghost Figure', 80, { sku: '4900000000001' })] }));
   assert.equal(ops(cod, 'appendShipped')[0].values.D, 'Call of Duty Ghost Figure');
 });
+
+test('一般網站訂單裡也有 POPW 商品（CA52750D）：現貨用訂單單號、POPW 用原單號', () => {
+  const preorders = {
+    'CA42482D-11': { row: 1, B: '', C: '2026-03-02', D: 'Xabungle', I: 1, L: 1, M: 71.99, N: 71.99, Nvalue: 71.99 },
+    'CA42482D-22': { row: 2, B: '', C: '2026-03-02', D: 'Belka', I: 2, L: 1, M: 149.99, N: 54, Nvalue: 54 }
+  };
+  const p = planOrder(order({ name: 'CA52750D', source: 'web', shippingCharged: 0, lines: [
+    line('Storm Collectibles M. Bison', 159.99), line('M.A.S.K. High Tech Helicopter', 149.99), line('M.A.S.K. Thunderhawk', 99.99),
+    line('CA42482D-11\tMODEROID Xabungle (Reissue)\t(4580828674738)\t2026-10-01', 0, { sku: '' }),
+    line('CA42482D-22\tCommando Belka 1/12 Action Figure\t(4595316221011)\t2026-10-01', 95.99, { sku: '' })] }), ctxWith({ preorders }));
+  assert.deepEqual(p.errors, []);
+  assert.deepEqual(ops(p, 'appendShipped').map((r) => r.values.A), ['CA52750D-1', 'CA52750D-2', 'CA52750D-3', 'CA42482D-11', 'CA42482D-22']);
+  assert.equal(ops(p, 'updatePreorder')[1].paidAfter, 149.99);
+});

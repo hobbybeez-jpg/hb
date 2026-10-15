@@ -71,7 +71,8 @@ function classifyLine(line, order) {
   var name = String(line.name || '');
   if (rulesNum(line.qty) <= 0) return 'removed';
   // POPW 出貨單的商品：「CA46701D⇥品名⇥(UPC)⇥日期」，有時是「CA39736D 品名」（空格）
-  if (order.source === 'shopify_draft_order' && RULES_RE.popwLine.test(name)) return 'popw';
+  // 有時出現在一般訂單裡（客人用網站結帳一起付預購尾款，例如 CA52750D）
+  if (RULES_RE.popwLine.test(name)) return 'popw';
   if (RULES_RE.skip.test(name)) return 'skip';
   if (!line.sku && !line.barcode && RULES_RE.duties.test(name)) return 'skip';
   if (RULES_RE.service.test(name)) return 'service';
@@ -200,7 +201,7 @@ function planOrder(order, ctx, options) {
     if (l.kind === 'stock' && l.requiresShipping === false) plan.warnings.push('「' + l.name + '」在 Shopify 設定為不需寄送，但不是預購格式，先當現貨記錄，請確認。');
   });
 
-  if (facts.isDraft && facts.popw.length) {
+  if (facts.popw.length) {
     planPopw(order, facts, ctx, plan, options);
   } else {
     // 等待中：補了運費但客人還沒付清；或 INT 單運費還是 $0（還沒報價）。不寫入、不算錯誤，付清後再掃描就會變成可寫入
