@@ -3,7 +3,7 @@
 // Script Properties（擴充功能 → Apps Script → 專案設定 → 指令碼屬性；或用選單「設定 Shopify 金鑰」）：
 //   SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET   Dev Dashboard app（client credentials，token 每 24 小時自動換）
 //   或 SHOPIFY_ADMIN_TOKEN                        2026 年以前在後台建立的舊式 custom app 的 token（shpat_…）
-// App 權限：read_orders、read_all_orders（POPW 要讀 60 天以前的原單）、read_products（讀 Pre-Order Deadline）
+// App 權限：read_orders、read_products（讀 Pre-Order Deadline）。沒有 read_all_orders 時只讀得到最近 60 天的訂單
 
 var SHOPIFY_ORDER_FIELDS = [
   'id name createdAt cancelledAt test sourceName email displayFinancialStatus',
@@ -45,6 +45,7 @@ function shopifyToken_(cfg, renew) {
   if (cached) return cached;
   var res = UrlFetchApp.fetch('https://' + cfg.store + '/admin/oauth/access_token', {
     method: 'post',
+    headers: { Accept: 'application/json' },
     payload: { grant_type: 'client_credentials', client_id: cfg.clientId, client_secret: cfg.clientSecret },
     muteHttpExceptions: true
   });
@@ -64,14 +65,14 @@ function shopifyGraphql(query, variables) {
     var res = UrlFetchApp.fetch(url, {
       method: 'post',
       contentType: 'application/json',
-      headers: { 'X-Shopify-Access-Token': shopifyToken_(cfg, renewed && attempt > 0) },
+      headers: { Accept: 'application/json', 'X-Shopify-Access-Token': shopifyToken_(cfg, renewed && attempt > 0) },
       payload: JSON.stringify({ query: query, variables: variables || {} }),
       muteHttpExceptions: true
     });
     var code = res.getResponseCode();
     if (code === 401 && !renewed && !cfg.adminToken) { renewed = true; continue; }
     if (code === 429 || code >= 500) { Utilities.sleep(1000 * (attempt + 1)); continue; }
-    if (code !== 200) throw new Error('Shopify API 錯誤 HTTP ' + code + '：' + res.getContentText().slice(0, 300));
+    if (code !== 200) throw new Error('Shopify API 錯誤 HTTP ' + code + '（' + url + '）：' + (res.getContentText().slice(0, 300) || '沒有回傳內容'));
     var body = JSON.parse(res.getContentText());
     if (body.errors && body.errors.length) {
       var throttled = body.errors.some(function (e) { return e.extensions && e.extensions.code === 'THROTTLED'; });
