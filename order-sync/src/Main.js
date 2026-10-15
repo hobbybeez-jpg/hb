@@ -43,8 +43,10 @@ function setupTabs() {
   s.setColumnWidth(1, 180); s.setColumnWidth(2, 360); s.setColumnWidth(3, 520);
   var log = book.getSheetByName(LOG_TAB) || book.insertSheet(LOG_TAB);
   if (log.getLastRow() === 0) {
-    log.getRange(1, 1, 1, 7).setValues([['時間', '單號', '摘要', '結果', '寫入位置', '警告', '執行者']]).setFontWeight('bold');
+    log.getRange(1, 1, 1, 8).setValues([['時間', '單號', '摘要', '結果', '寫入位置', '警告', '執行者', '寫入的試算表']]).setFontWeight('bold');
     log.setFrozenRows(1);
+  } else if (!log.getRange(1, 8).getValue()) {
+    log.getRange(1, 8).setValue('寫入的試算表').setFontWeight('bold');
   }
   SpreadsheetApp.getUi().alert('「設定」和「紀錄」分頁已建立。請在「設定」填好試算表 ID，再用選單「設定 Shopify 金鑰」。');
 }
@@ -277,14 +279,7 @@ function apiWriteBatch(items, start) {
 
 function apiRecent() {
   var orders = shopifyRecentOrders(25);
-  var done = {};
-  var log = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(LOG_TAB);
-  if (log && log.getLastRow() > 1) {
-    log.getRange(2, 2, log.getLastRow() - 1, 3).getValues().forEach(function (r) {
-      if (String(r[2]).indexOf('OK') === 0) done[String(r[0]).trim()] = true;
-    });
-  }
-  orders.forEach(function (o) { o.done = !!done[o.name]; });
+  orders.forEach(function (o) { o.done = logEntriesFor_(o.name).length > 0; });
   return orders;
 }
 
@@ -293,26 +288,30 @@ var LOG_MEMO_ = null;
 function logRows_() {
   if (!LOG_MEMO_) {
     var log = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(LOG_TAB);
-    LOG_MEMO_ = log && log.getLastRow() > 1 ? log.getRange(2, 1, log.getLastRow() - 1, 4).getValues() : [];
+    LOG_MEMO_ = log && log.getLastRow() > 1 ? log.getRange(2, 1, log.getLastRow() - 1, 8).getValues() : [];
   }
   return LOG_MEMO_;
 }
 
+// 這張單寫入「目前設定的庫存/出貨/預購」的紀錄（測試時寫到副本的紀錄，換成正式檔後就不算）
 function logEntriesFor_(name) {
-  var tz = getSettings().TIMEZONE || 'America/Vancouver';
+  var settings = getSettings();
+  var tz = settings.TIMEZONE || 'America/Vancouver';
   return logRows_().filter(function (r) {
-    return String(r[1]).trim() === name && String(r[3]).indexOf('OK') === 0;
+    return String(r[1]).trim() === name && String(r[3]).indexOf('OK') === 0 && String(r[7]).trim() === settings.MAIN_SHEET_ID;
   }).map(function (r) { return r[0] instanceof Date ? Utilities.formatDate(r[0], tz, 'yyyy-MM-dd HH:mm') : String(r[0]); });
 }
 
 function appendLog_(plan, written, result) {
   var log = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(LOG_TAB);
   if (!log) return;
-  if (LOG_MEMO_) LOG_MEMO_.push([new Date(), plan.order, plan.summary || '', result]);
-  log.appendRow([
+  var row = [
     new Date(), plan.order, plan.summary || '', result,
     written.map(function (w) { return w.tab + '!' + w.row; }).join('\n'),
     (plan.warnings || []).join('\n'),
-    Session.getActiveUser().getEmail()
-  ]);
+    Session.getActiveUser().getEmail(),
+    getSettings().MAIN_SHEET_ID || ''
+  ];
+  if (LOG_MEMO_) LOG_MEMO_.push(row);
+  log.appendRow(row);
 }
