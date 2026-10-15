@@ -52,7 +52,7 @@
 </div>
 <div class="footer">
   <label id="ackWrap" style="display:none"><input type="checkbox" id="ack" onchange="updateWrite()"> 我已確認上面的警告</label>
-  <button class="primary" id="writeBtn" disabled onclick="write()">寫入</button>
+  <button class="primary" id="writeBtn" disabled onclick="submitWrite()">寫入</button>
   <span id="status" class="muted"></span>
 </div>
 <script>
@@ -133,7 +133,7 @@ function render(res) {
       h.push('<table><tr>' + cols.map(function (c) { return '<th>' + c + '</th>'; }).join('') + '</tr><tr>' + cols.map(function (c) {
         var color = a.colors && a.colors[c];
         var v = vals[c];
-        return '<td>' + (typeof v === 'number' ? money(v) : esc(v)) + (color ? '<span class="sw" style="background:' + esc(color) + '"></span>' : '') + '</td>';
+        return '<td>' + (typeof v === 'number' ? (Number.isInteger(v) && /^[ILJ]$/.test(c) ? v : money(v)) : esc(v)) + (color ? '<span class="sw" style="background:' + esc(color) + '"></span>' : '') + '</td>';
       }).join('') + '</tr></table>');
     }
     if (a.op === 'appendPreorder') h.push('<div class="muted">J、K 欄複製上一列的公式；O 欄：' + (a.deposit ? '=M×L−N' : '---') + '；D:H 合併</div>');
@@ -155,7 +155,8 @@ function updateWrite() {
   btn.disabled = !!p.errors.length || !writable || (p.warnings.length && !document.getElementById('ack').checked);
 }
 
-function write() {
+// 不能叫 write()：onclick 裡的 write() 會變成 document.write()，把整個視窗清空
+function submitWrite() {
   if (!current) return;
   var name = current.order.name;
   document.getElementById('writeBtn').disabled = true;
