@@ -68,12 +68,22 @@ SheetsSession.prototype.shippedYears = function (fromYear) {
   return Object.keys(years).map(Number).sort(function (a, b) { return b - a; });
 };
 
+// 欄位資料：A～F 欄一次讀進來（找單號、找最後一列都用這幾欄），大試算表少讀幾次比較快
+var SHEETS_BLOCK_COLS = 6;
+
 SheetsSession.prototype.columnValues = function (ref, col) {
   var id = ref.sheet.getSheetId ? ref.sheet.getSheetId() : ref.sheet.getName();
-  var cacheKey = (ref.book.getId ? ref.book.getId() : '') + '|' + id + '|' + col;
+  var sheetKey = (ref.book.getId ? ref.book.getId() : '') + '|' + id;
+  var cacheKey = sheetKey + '|' + col;
   if (!this.columns[cacheKey]) {
     var last = ref.sheet.getLastRow();
-    this.columns[cacheKey] = last ? ref.sheet.getRange(1, col, last, 1).getValues().map(function (r) { return r[0]; }) : [];
+    if (col <= SHEETS_BLOCK_COLS) {
+      this.blocks = this.blocks || {};
+      if (!this.blocks[sheetKey]) this.blocks[sheetKey] = last ? ref.sheet.getRange(1, 1, last, SHEETS_BLOCK_COLS).getValues() : [];
+      this.columns[cacheKey] = this.blocks[sheetKey].map(function (r) { return r[col - 1]; });
+    } else {
+      this.columns[cacheKey] = last ? ref.sheet.getRange(1, col, last, 1).getValues().map(function (r) { return r[0]; }) : [];
+    }
   }
   return this.columns[cacheKey];
 };
@@ -262,11 +272,20 @@ function sheetsMerge_(sheet, row, col, width) {
   try { range.merge(); } catch (e) { /* 合併失敗不影響資料 */ }
 }
 
+// 相鄰的欄位一次寫入
 function sheetsSetValues_(sheet, row, values) {
-  Object.keys(values).forEach(function (col) {
-    var v = values[col];
-    sheet.getRange(row, SHEETS_COL[col]).setValue(v);
-  });
+  var cols = Object.keys(values).map(function (c) { return SHEETS_COL[c]; }).sort(function (a, b) { return a - b; });
+  var byCol = {};
+  Object.keys(values).forEach(function (c) { byCol[SHEETS_COL[c]] = values[c]; });
+  var i = 0;
+  while (i < cols.length) {
+    var j = i;
+    while (j + 1 < cols.length && cols[j + 1] === cols[j] + 1) j++;
+    var run = [];
+    for (var k = i; k <= j; k++) run.push(byCol[cols[k]]);
+    sheet.getRange(row, cols[i], 1, run.length).setValues([run]);
+    i = j + 1;
+  }
 }
 
 function sheetsNewPaidFormula_(current, add) {

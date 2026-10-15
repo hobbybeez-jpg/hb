@@ -34,6 +34,7 @@ class FakeRange {
     return this;
   }
   setValue(v) { this.cells((x) => { x.v = v; delete x.f; }); return this; }
+  setValues(rows) { this.cells((x, r, c) => { x.v = rows[r - this.row][c - this.col]; delete x.f; }); return this; }
   setFormula(f) { this.cells((x) => { x.f = f; x.v = ''; }); return this; }
   setBackground(c) { this.cells((x) => { x.bg = c; }); return this; }
   getNumberFormat() { return this.sheet.cell(this.row, this.col).fmt || ''; }
