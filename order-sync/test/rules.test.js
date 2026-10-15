@@ -435,3 +435,14 @@ test('POPW：PW／現貨商品自取出貨，沒有運費也沒有手續費 → 
   assert.equal(classifyPlan(p), 'done');
   assert.equal(ops(p, 'updateShipped').length, 0);
 });
+
+test('任何關稅收費都不記錄；名稱有 Duty 但有 SKU 的商品照常記錄', () => {
+  const fee = (n) => line(n, 10, { sku: '', requiresShipping: false });
+  for (const n of ['Duties (US)', 'Prepaid Duties (US)', 'Import Duty', 'US duties', '關稅']) {
+    const p = planOrder(order({ lines: [line('Figure', 50), fee(n)] }));
+    assert.equal(ops(p, 'appendShipped')[0].values.L, 14.99, n);
+    assert.ok(p.notes.some((x) => x.includes(n)), n);
+  }
+  const cod = planOrder(order({ lines: [line('Call of Duty Ghost Figure', 80, { sku: '4900000000001' })] }));
+  assert.equal(ops(cod, 'appendShipped')[0].values.D, 'Call of Duty Ghost Figure');
+});

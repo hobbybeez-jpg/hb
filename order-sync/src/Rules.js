@@ -24,7 +24,9 @@ var RULES_COLORS = {
 var RULES_RE = {
   service: /Damage\s*&\s*Loss Insurance|Gift Wrapping|Private Warehouse Storage Fee/i,
   shippingLike: /shipping/i,
-  skip: /^Gift Card\b|Coin Exchange|^Transaction Fee$|^Cancellation Fee$|\bDuties\b/i,
+  skip: /^Gift Card\b|Coin Exchange|^Transaction Fee$|^Cancellation Fee$/i,
+  // 關稅（Duties (US)、Prepaid Duties (US)…）：只看沒有 SKU／Barcode 的自訂收費，避免排除名稱剛好有 Duty 的商品
+  duties: /\bdut(y|ies)\b|關稅/i,
   preorder: /\s+-\s+(Pay in full(?:\s*\([^)]*\))?|Pay a 20% non-refundable deposit)\s*$/i,
   deposit: /Pay a 20% non-refundable deposit\s*$/i,
   backorder: /^\s*\[backorder\]\s*/i,
@@ -71,6 +73,7 @@ function classifyLine(line, order) {
   // POPW 出貨單的商品：「CA46701D⇥品名⇥(UPC)⇥日期」，有時是「CA39736D 品名」（空格）
   if (order.source === 'shopify_draft_order' && RULES_RE.popwLine.test(name)) return 'popw';
   if (RULES_RE.skip.test(name)) return 'skip';
+  if (!line.sku && !line.barcode && RULES_RE.duties.test(name)) return 'skip';
   if (RULES_RE.service.test(name)) return 'service';
   if (!line.sku && !line.barcode && RULES_RE.shippingLike.test(name)) return 'service';
   if (RULES_RE.backorder.test(name)) return 'backorder';
