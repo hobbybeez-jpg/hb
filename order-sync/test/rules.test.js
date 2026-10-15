@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { planOrder, rulesAllocate, rulesCleanName } = require('../src/Rules.js');
+const { planOrder, rulesAllocate, rulesCleanName, classifyPlan } = require('../src/Rules.js');
 
 const GRAY = '#cccccc', CYAN = '#00ffff', ORANGE = '#ff9900', BLUE = '#4a86e8', GREEN = '#93c47d';
 
@@ -66,10 +66,15 @@ test('POS：Platform=Store、M=0、不上灰底', () => {
   assert.deepEqual(rows.map((r) => [r.values.C, r.values.M, r.colors.M]), [['Store', 0, undefined], ['Store', 0, undefined]]);
 });
 
-test('INT：還沒付清不處理；付清後 N=第一筆付款手續費、O=補運費那筆的手續費', () => {
+test('INT：還沒報運費、還沒付清都是「等待中」；付清後 N=第一筆付款手續費、O=補運費那筆的手續費', () => {
   const lines = [line('Figure', 289.99)];
+  const notQuoted = planOrder(order({ country: 'AU', shippingTitle: 'International Shipping', shippingCharged: 0, lines }));
+  assert.equal(classifyPlan(notQuoted), 'waiting');
+  assert.ok(notQuoted.errors.length, '逐筆模式也不能寫入');
   const pending = planOrder(order({ country: 'AU', shippingTitle: 'International Shipping', financialStatus: 'partially_paid', shippingCharged: 66, lines }));
-  assert.match(pending.errors.join(), /INT/);
+  assert.equal(classifyPlan(pending), 'waiting');
+  const hawaii = planOrder(order({ country: 'US', shippingTitle: 'Shipping (Hawaii)', financialStatus: 'partially_paid', shippingCharged: 24.99, lines }));
+  assert.equal(classifyPlan(hawaii), 'waiting');
   const paid = planOrder(order({
     country: 'AU', shippingTitle: 'International Shipping', shippingCharged: 66, lines,
     payments: [
@@ -285,7 +290,6 @@ test('POPW：自取 → M=0 青色；Duties 不記', () => {
 });
 
 // ---- 批次清單的狀態 ----
-const { classifyPlan } = require('../src/Rules.js');
 
 test('classifyPlan：已登記／部分已登記／錯誤／需確認／可寫入／不用記錄', () => {
   const a = (op) => ({ op });

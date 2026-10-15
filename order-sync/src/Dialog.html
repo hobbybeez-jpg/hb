@@ -50,6 +50,7 @@
   <div class="side">
     <div class="box">
       <b>找未登記的訂單</b>
+      <div class="muted" style="font-size:11px">這段期間內下單或有更新（例如付清運費）的單</div>
       <label>從 <input type="date" id="from"></label>
       <label>到 <input type="date" id="to"></label>
       <button class="primary" onclick="scan()" style="width:100%">掃描</button>
@@ -75,7 +76,7 @@
 var current = null;
 var batch = null;
 var STATUS = {
-  ready: ['可寫入', 'ok'], warn: ['需確認', 'warn'], error: ['錯誤', 'err'], partial: ['部分已登記', 'err'],
+  ready: ['可寫入', 'ok'], warn: ['需確認', 'warn'], waiting: ['等待付款／運費', 'note'], error: ['錯誤', 'err'], partial: ['部分已登記', 'err'],
   done: ['已登記', 'note'], nothing: ['不用記錄', 'note'], skip: ['略過', 'note'], written: ['已寫入', 'ok'], failed: ['寫入失敗', 'err']
 };
 var KIND = { stock: '現貨', preorder: '預購', backorder: 'backorder', service: '服務費/運費', skip: '不記錄', popw: 'POPW 出貨', removed: '已移除' };
