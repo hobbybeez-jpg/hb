@@ -181,13 +181,13 @@ function planOrder(order, ctx, options) {
   if (facts.isDraft && facts.popw.length) {
     planPopw(order, facts, ctx, plan, options);
   } else {
-    if (/partially/i.test(order.financialStatus || '')) {
-      if (facts.region === 'INT') plan.errors.push('INT 訂單還沒付清（partially paid）：等客人付完運費 invoice 再處理。');
-      else plan.warnings.push('訂單還沒付清（' + order.financialStatus + '），請確認是否要現在記錄。');
+    // 等待中：補了運費但客人還沒付清；或 INT 單運費還是 $0（還沒報價）。不寫入、不算錯誤，付清後再掃描就會變成可寫入
+    if (/^partially_paid$/i.test(order.financialStatus || '')) {
+      plan.waiting = '還沒付清（partially paid）：等客人付完運費 invoice 再處理。';
+    } else if (facts.region === 'INT' && facts.stock.length && facts.shipping === 0) {
+      plan.waiting = 'INT 訂單運費還是 $0：等報價、客人付完運費再處理。';
     }
-    if (facts.region === 'INT' && facts.stock.length && facts.shipping === 0) {
-      plan.warnings.push('INT 訂單運費是 $0：如果運費還沒報價，請等客人付完運費再處理。');
-    }
+    if (plan.waiting) plan.errors.push(plan.waiting);
     planNewOrder(order, facts, ctx, plan);
   }
 
@@ -422,10 +422,12 @@ function planPopw(order, facts, ctx, plan, options) {
 }
 
 // 批次清單用：這張單目前的狀態
+//   waiting：等客人付清／等 INT 運費報價（不寫入，之後再掃描）
 //   done：要新增的列都已經在試算表裡（已登記）
 //   partial：有些已登記、有些沒有，要人工處理
 //   error：有錯誤；warn：有警告要人確認；ready：可以直接寫；nothing：沒有要記錄的東西
 function classifyPlan(plan) {
+  if (plan.waiting) return 'waiting';
   var dups = plan.duplicates || [];
   var appends = plan.actions.filter(function (a) { return /^append/.test(a.op); });
   if (dups.length) {

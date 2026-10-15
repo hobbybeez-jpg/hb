@@ -127,14 +127,15 @@ function shopifyRecentOrders(n) {
 
 var SHOPIFY_LIST_QUERY = 'query List($q: String!, $after: String) { orders(first: 100, after: $after, sortKey: CREATED_AT, query: $q) { nodes { name createdAt sourceName displayFinancialStatus cancelledAt test } pageInfo { hasNextPage endCursor } } }';
 
-// 某段日期（溫哥華時間，含頭尾兩天）建立的訂單，從舊到新
+// 某段日期（溫哥華時間，含頭尾兩天）內「建立或有更新」的訂單，從舊到新。
+// 用更新時間是為了抓到之前下單、這幾天才付清運費（INT）或改過的單
 function shopifyListOrders(fromDate, toDate) {
   var tz = getSettings().TIMEZONE || 'America/Vancouver';
   var from = Utilities.parseDate(fromDate + ' 00:00:00', tz, 'yyyy-MM-dd HH:mm:ss');
   var to = Utilities.parseDate(toDate + ' 23:59:59', tz, 'yyyy-MM-dd HH:mm:ss');
   if (isNaN(from.getTime()) || isNaN(to.getTime()) || from > to) throw new Error('日期範圍不對：' + fromDate + ' ～ ' + toDate);
   if ((to - from) / 86400000 > 31) throw new Error('一次最多掃 31 天。');
-  var q = "created_at:>='" + from.toISOString() + "' created_at:<='" + to.toISOString() + "'";
+  var q = "updated_at:>='" + from.toISOString() + "' created_at:<='" + to.toISOString() + "'";
   var out = [];
   var after = null;
   for (var page = 0; page < 10; page++) {
