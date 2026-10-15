@@ -11,7 +11,7 @@ var SETTINGS_DEFAULTS = [
   ['SHOPIFY_API_VERSION', '2026-07', 'Shopify Admin API 版本'],
   ['MAIN_SHEET_ID', '', '庫存/出貨/預購（今年的已出貨、預購、訂貨都在這裡）的試算表 ID：網址 /d/ 和 /edit 中間那一段'],
   ['POPW_SHEET_ID', '', 'PW/PO（Private Warehouse / PO Arrival）試算表 ID'],
-  ['POPW_TAB', 'POPW', 'PW/PO 試算表裡記錄 PW 的分頁名稱'],
+  ['POPW_TAB', 'PO/PW', 'PW/PO 試算表裡記錄 PW 的分頁名稱（要和分頁標籤一字不差）'],
   ['YEAR_SHEET_2025', '', '2025 年已出貨的獨立試算表 ID（POPW 出貨的原單是 2025 年時寫到這裡）'],
   ['YEAR_SHEET_2024', '', '2024 年已出貨的獨立試算表 ID'],
   ['ALERT_EMAIL', '', '預購應付和已付對不起來時寄信到這裡'],

@@ -32,7 +32,7 @@ function setup() {
     { D: '=SUMIF(預購!I:I,B5,預購!L:L)', E: '=J5+N5+R5+V5' }
   ]);
   const main = new FakeBook('MAIN', [ca, int, pre, ordering]);
-  const popwTab = new FakeSheet('POPW', 21, [
+  const popwTab = new FakeSheet('PO/PW', 21, [
     { B: 'Transferred', C: 'Type', D: 'Invoice Sent', E: 'Order Number' },
     { C: 'PW', D: new Date(2026, 9, 10), E: 'CA52825D', F: 'RX-78-2', G: 4573102655271, H: '=TODAY()', I: 1, J: 'x@example.com',
       L: '=IF(ISBLANK(D2), "", D2 + 52)', M: '=IF(ISBLANK(D2), "", D2 + 60)', P: '=MIN(M2,12)', Q: '=SUMIF(J:J, J2, P:P)' }

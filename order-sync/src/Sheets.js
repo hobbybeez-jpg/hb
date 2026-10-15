@@ -26,7 +26,7 @@ SheetsSession.prototype.tz = function () {
 
 SheetsSession.prototype.preorderTabName = function () { return this.settings.PREORDER_TAB || '預購'; };
 SheetsSession.prototype.orderingTabName = function () { return this.settings.ORDERING_TAB || '訂貨'; };
-SheetsSession.prototype.popwTabName = function () { return this.settings.POPW_TAB || 'POPW'; };
+SheetsSession.prototype.popwTabName = function () { return this.settings.POPW_TAB || 'PO/PW'; };
 
 SheetsSession.prototype.mainSheet = function (name) {
   var book = this.book(this.settings.MAIN_SHEET_ID);
