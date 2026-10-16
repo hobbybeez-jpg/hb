@@ -76,7 +76,7 @@
 
 ## Renfrew 庫存（Renfrew Stock）
 
-- 預設貨架：**Main Rack（MAIN，排第一）、Nendoroid（N）、POP UP PARADE（PP）、Prize Figure（PF）、Action Figure（A）、Blind Box（B）、MegaHouse（MH）** 和 **Pending（暫置）**。每個貨架預設一格，編號為 MAIN-0、N-1、PP-1、PF-1、A-1、B-1、MH-1。可在「Manage Locations」新增格位（輸入貨架代碼會自動建議下一個編號，例如 N-2），或輸入新的貨架代碼與名稱建立新貨架（不需要密碼；刪除格位時該格必須是空的）。
+- 預設貨架：**Main Rack（MAIN，排第一）、Nendoroid（N）、POP UP PARADE（PP）、Prize Figure（PF）、Action Figure（A）、Blind Box（B）、MegaHouse（MH）、Tool（TOOL）** 和 **Pending（暫置）**。每個貨架預設一格，編號為 MAIN-0、N-1、PP-1、PF-1、A-1、B-1、MH-1、TOOL-1。可在「Manage Locations」新增格位（輸入貨架代碼會自動建議下一個編號，例如 N-2），或輸入新的貨架代碼與名稱建立新貨架（不需要密碼；刪除格位時該格必須是空的）。
 - **待歸架**：點到的商品就可以歸架，不用等 4b 完成。每個商品分成兩部分：
   - **Pending**：預設 1 件（上店面用）。如果 Pending 裡已經有這個商品，或這張單已經放過，預設 0。
   - **Box**：其餘數量，預設放到這個 UPC 目前所在（或上次放）的格子；第一次出現的商品**格子是空白**，員工一定要自己選（避免點太快誤放進 Main Rack），或用「Set box for all」一次設定。
