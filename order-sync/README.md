@@ -108,7 +108,7 @@ N 欄（原單手續費）留空、原單的保險不會自動加到 L 欄，預
 | PW | 已出貨照常記（M 橘色），另外在 PW/PO 的「PO/PW」分頁新增：C=`PW`（灰底）、D=訂單日期、E 單號、F 品名、G UPC、I 數量、J email，H/L/M/P/Q 公式從上一列複製 |
 | 預購 | 只記在「預購」分頁：A 單號、B（backorder＝`backorder`；只有預購而且有付運費＝`shipping paid` 藍底）、C 日期、D 品名（去掉款式和 [Backorder]）、I UPC、L 數量、M 單價應付、N 已付總額。訂金：M＝訂金×5−0.01（不是 .99 結尾會警告）。有折扣時 M 和 N 都扣。J、K 公式從上一列複製；O＝訂金 `=M*L-N`，全額 `---` |
 | 原單資料 | 預購/backorder 每個商品在控制台「原單資料」存一列：分到的保險等服務費（平分給原單的預購商品）、原單手續費（按已付金額比例）、整張原單預付的運費。出貨時原單可能已經超過 60 天讀不到，就用這份資料 |
-| 訂貨 | 預購/backorder 的 UPC 在「訂貨」B 欄找不到時，在最後一筆資料下面新增 A 品名、B UPC、C Pre-Order Deadline（從商品敘述 `Pre-Order Deadline: 2026-10-23` 讀） |
+| 訂貨 | 預購/backorder 的 UPC 在「訂貨」B 欄找不到時，在最後一筆資料下面新增 A 品名、B UPC、C Pre-Order Deadline（從商品敘述 `Pre-Order Deadline: 2026-10-23` 讀）；D、E、H 公式從上面最近一列複製（H 用整欄 ARRAYFORMULA 時不寫） |
 | 不記錄 | Gift Card、Coin Exchange、Transaction Fee、Cancellation Fee，以及任何關稅（沒有 SKU 的自訂收費，名稱有 Duty／Duties／關稅，例如 Duties (US)、Prepaid Duties (US)），會在預覽裡列出 |
 | H Supplier | 留空，人工填 |
 

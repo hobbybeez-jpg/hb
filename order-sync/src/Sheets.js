@@ -459,7 +459,7 @@ SheetsSession.prototype.execute = function (plan) {
       sheetsEnsureRows_(sheet, row, tpl);
       sheetsSetValues_(sheet, row, Object.assign({}, a.values, { C: a.values.C ? sheetsToDate_(a.values.C) : '' }));
       sheetsFormats_(sheet, row, [SHEETS_COL.C], tpl);
-      sheetsFormulas_(sheet, row, [SHEETS_COL.D, SHEETS_COL.E], tpl);
+      sheetsFormulas_(sheet, row, [SHEETS_COL.D, SHEETS_COL.E, SHEETS_COL.H], tpl);
       self.remember(ref, row, a.values);
     } else if (a.op === 'saveOriginal') {
       sheetsEnsureRows_(sheet, row, tpl);

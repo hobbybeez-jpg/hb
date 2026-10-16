@@ -27,7 +27,7 @@ function setup() {
   const ordering = new FakeSheet('訂貨', 14, [
     { A: 'Item', B: 'UPC', C: 'PO Deadline', D: 'PO Qty', E: 'Total Ordered' },
     { A: 'legend' },
-    { A: 'Existing', B: 45557611514, C: new Date(2026, 9, 1), D: '=SUMIF(預購!I:I,B3,預購!L:L)', E: '=J3+N3+R3+V3' },
+    { A: 'Existing', B: 45557611514, C: new Date(2026, 9, 1), D: '=SUMIF(預購!I:I,B3,預購!L:L)', E: '=J3+N3+R3+V3', H: '=IF(AND(ISNUMBER(F3),ISNUMBER(G3)),(G3*1.2-F3)/100,"")' },
     { D: '=SUMIF(預購!I:I,B4,預購!L:L)', E: '=J4+N4+R4+V4' },
     { D: '=SUMIF(預購!I:I,B5,預購!L:L)', E: '=J5+N5+R5+V5' }
   ]);
@@ -105,6 +105,7 @@ test('預購：新增一列、複製 J/K 公式、訂金 O 欄公式；訂貨表
   assert.equal(ordering.get('B4').v, 4570000000001);
   assert.ok(ordering.get('C4').v instanceof Date);
   assert.equal(ordering.get('D4').f, '=SUMIF(預購!I:I,B4,預購!L:L)');
+  assert.equal(ordering.get('H4').f, '=IF(AND(ISNUMBER(F4),ISNUMBER(G4)),(G4*1.2-F4)/100,"")');
 });
 
 test('PW：POPW 分頁新增一列並複製公式', () => {
