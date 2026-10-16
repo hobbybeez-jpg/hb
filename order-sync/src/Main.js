@@ -268,6 +268,7 @@ function apiWriteBatch(items, start) {
   var i = start || 0;
   try {
     var session = newSession_();
+    session.warmUp(Number(Utilities.formatDate(new Date(), getSettings().TIMEZONE || 'America/Vancouver', 'yyyy')));
     for (; i < items.length; i++) {
       if (Date.now() - began > BATCH_TIME_LIMIT_MS) break;
       var saved = session.saveRows();
