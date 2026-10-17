@@ -111,11 +111,16 @@ function testShopifyConnection() {
   var ui = SpreadsheetApp.getUi();
   var r = ui.prompt('測試 Shopify 連線', '輸入一個單號（例如 CA53126D）', ui.ButtonSet.OK_CANCEL);
   if (r.getSelectedButton() !== ui.Button.OK) return;
+  var scopes;
+  try { scopes = shopifyAccessScopes(); } catch (e) { scopes = null; }
+  var scopeText = scopes ? '目前的權限：' + (scopes.join('、') || '（沒有）') +
+    (scopes.indexOf('read_all_orders') < 0 ? '\n沒有 read_all_orders：只讀得到最近 60 天的訂單。' : '\n有 read_all_orders：讀得到 60 天以前的訂單。') : '（讀不到目前的權限）';
   var raw = shopifyFetchOrderRaw(r.getResponseText());
-  if (!raw) { ui.alert('Shopify 找不到這張單。'); return; }
+  if (!raw) { ui.alert('Shopify 找不到這張單。\n\n' + scopeText); return; }
   (raw.lineItems.nodes || []).forEach(function (li) { if (li.product && li.product.descriptionHtml) li.product.descriptionHtml = li.product.descriptionHtml.slice(0, 200) + '…'; });
-  var html = HtmlService.createHtmlOutput('<pre style="font-size:11px;white-space:pre-wrap">' +
-    JSON.stringify(raw, null, 2).replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</pre>').setWidth(900).setHeight(650);
+  var esc = function (t) { return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;'); };
+  var html = HtmlService.createHtmlOutput('<p style="font:13px sans-serif;white-space:pre-wrap">' + esc(scopeText) + '</p>' +
+    '<pre style="font-size:11px;white-space:pre-wrap">' + esc(JSON.stringify(raw, null, 2)) + '</pre>').setWidth(900).setHeight(650);
   ui.showModalDialog(html, 'Shopify 原始資料：' + raw.name);
 }
 

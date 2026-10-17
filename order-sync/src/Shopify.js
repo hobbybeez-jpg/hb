@@ -86,6 +86,12 @@ function shopifyGraphql(query, variables) {
   throw new Error('Shopify API 一直忙線，請稍後再試。');
 }
 
+// 目前的授權實際拿到的權限（例如 read_orders、read_all_orders）
+function shopifyAccessScopes() {
+  var data = shopifyGraphql('{ currentAppInstallation { accessScopes { handle } } }', {});
+  return ((data.currentAppInstallation && data.currentAppInstallation.accessScopes) || []).map(function (s) { return s.handle; });
+}
+
 function shopifyCleanName(name) {
   return String(name || '').trim().replace(/^#/, '').toUpperCase();
 }
