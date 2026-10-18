@@ -34,6 +34,8 @@ var RULES_RE = {
   upcInName: /\((\d{6,14})\)/,
   pickup: /Vancouver \(Renfrew\)|Pick-?\s?up|Pick up in store/i,
   pw: /^\s*Do not Ship\.?\s*Store at my Private Warehouse/i,
+  // 新訂單改用這個服務商品選擇 PW 存放（商品本身不記錄）
+  pwService: /Store (this order )?at my Private Warehouse/i,
   deadline: /Pre-?Order\s*Deadline\s*:?\s*(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/i
 };
 
@@ -128,7 +130,7 @@ function rulesOrderFacts(order, options) {
   var services = lines.filter(function (l) { return l.kind === 'service'; });
   var title = String(order.shippingTitle || '');
   var isPickup = RULES_RE.pickup.test(title);
-  var isPW = RULES_RE.pw.test(title);
+  var isPW = RULES_RE.pw.test(title) || (order.lines || []).some(function (l) { return rulesNum(l.qty) > 0 && RULES_RE.pwService.test(String(l.name || '')); });
   var country = String(order.country || '').toUpperCase();
   var region = (!isPickup && !isPW && country && country !== 'CA' && country !== 'US') ? 'INT' : 'CA';
   var servicesTotal = rulesRound2(services.reduce(function (s, l) { return s + rulesLineTotal(l); }, 0));
@@ -175,6 +177,26 @@ function rulesExtrasShare(of, origLine) {
   var idx = of.pre.indexOf(origLine);
   if (idx < 0) return 0;
   return rulesAllocate(of.extras, of.pre.map(function () { return 1; }))[idx];
+}
+
+// 從同一張原單的 -1、-2… 裡挑出對應的那一列：先排除出貨單上明確寫出的編號，再用 UPC、品名，剩一個就用它
+function rulesPickCandidate(cands, explicitCodes, upc, itemName) {
+  var list = cands.filter(function (c) { return !explicitCodes[String(c.code).toUpperCase()]; });
+  if (!list.length) return {};
+  if (upc) {
+    var byUpc = list.filter(function (c) { return rulesUpcKey(c.I) === rulesUpcKey(upc); });
+    if (byUpc.length === 1) return { found: byUpc[0], by: '用 UPC 對到' };
+    if (byUpc.length > 1) list = byUpc;
+  }
+  var norm = function (t) { return String(t || '').toLowerCase().replace(/\s+/g, ' ').trim(); };
+  var n = norm(itemName);
+  if (n) {
+    var byName = list.filter(function (c) { var d = norm(c.D); return d && (d.indexOf(n) >= 0 || n.indexOf(d) >= 0); });
+    if (byName.length === 1) return { found: byName[0], by: '用品名對到' };
+    if (byName.length > 1) list = byName;
+  }
+  if (list.length === 1) return { found: list[0], by: '只有這一個' };
+  return { ambiguous: list.map(function (c) { return c.code; }) };
 }
 
 // CA42482D-3 → [42482, 3]，用來把出貨單的商品照單號排序
@@ -382,13 +404,43 @@ function planPopw(order, facts, ctx, plan, options) {
     var x = rulesCodeOrder(RULES_RE.popwLine.exec(a.name)[1]), y = rulesCodeOrder(RULES_RE.popwLine.exec(b.name)[1]);
     return firstSeen[x[0]] - firstSeen[y[0]] || x[1] - y[1] || a.index - b.index;
   });
+  var explicitCodes = {};
+  popwLines.forEach(function (l) { explicitCodes[RULES_RE.popwLine.exec(l.name)[1].toUpperCase()] = true; });
   popwLines.forEach(function (line, i) {
     var first = i === 0;
     var m = RULES_RE.popwLine.exec(line.name);
     var code = m[1].toUpperCase();
     var base = code.replace(/-\d+$/, '');
     var linePaid = rulesLineTotal(line);
+    var itemName = String(m[2] || '').split(/\t|\s\(/)[0].trim();
+    var upcMatch = RULES_RE.upcInName.exec(m[2] || '');
     var pre = ctx.findPreorder ? ctx.findPreorder(code) : null;
+    var shipped = null;
+    // 出貨單上寫「CA37556D」，試算表是「CA37556D-1」：找同一張原單的 -1、-2…，用 UPC、品名對
+    if (!pre && code === base) {
+      var pick = rulesPickCandidate(ctx.preorderCandidates ? ctx.preorderCandidates(base) : [], explicitCodes, upcMatch && upcMatch[1], itemName);
+      if (pick.found) {
+        pre = pick.found;
+        plan.notes.push(code + '：出貨單上沒有編號，對應到預購表第 ' + pre.row + ' 列的 ' + pre.code + '（' + pick.by + '）。');
+        code = pre.code;
+      } else if (pick.ambiguous) {
+        plan.errors.push(code + '：預購表有好幾個 ' + base + '-N（' + pick.ambiguous.join('、') + '），對不出是哪一個，請手動處理。');
+        return;
+      } else {
+        shipped = ctx.findShipped ? ctx.findShipped(code) : null;
+        if (!shipped) {
+          var spick = rulesPickCandidate(ctx.shippedCandidates ? ctx.shippedCandidates(base) : [], explicitCodes, null, itemName);
+          if (spick.found) {
+            shipped = spick.found;
+            plan.notes.push(code + '：出貨單上沒有編號，對應到「' + shipped.tab + '」第 ' + shipped.row + ' 列的 ' + shipped.code + '（' + spick.by + '）。');
+            code = shipped.code;
+          } else if (spick.ambiguous) {
+            plan.errors.push(code + '：已出貨表有好幾個 ' + base + '-N（' + spick.ambiguous.join('、') + '），對不出是哪一個，請手動處理。');
+            return;
+          }
+        }
+      }
+    }
 
     if (pre) {
       var wasBackorder = /backorder/i.test(String(pre.B || ''));
@@ -479,7 +531,7 @@ function planPopw(order, facts, ctx, plan, options) {
       return;
     }
 
-    var shipped = ctx.findShipped ? ctx.findShipped(code) : null;
+    shipped = shipped || (ctx.findShipped ? ctx.findShipped(code) : null);
     if (shipped) {
       if (!first) {
         plan.notes.push(code + '：PW 商品出貨（第 ' + (i + 1) + ' 項），運費和手續費記在第一項，這一列不用改。');

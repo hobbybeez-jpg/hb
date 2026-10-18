@@ -288,3 +288,27 @@ test('寫入時不會「寫完再讀」：一批好幾張單（現貨、預購�
   assert.equal(pre.get('N3').f, '=72+287.99');
   assert.equal(popwTab.get('M3').f, '=IF(ISBLANK(D3), "", D3 + 60)');
 });
+
+test('出貨單上的單號沒寫編號（CA37556D），預購表是 CA37556D-1：用 UPC 對到，明確寫出的 -2 不重複', () => {
+  const { pre, ca, settings } = setup();
+  pre.setRow(5, { A: 'CA37556D-1', B: '', C: new Date(2025, 9, 1), D: 'Figure One', I: 4500000000011, L: 1, M: 100, N: 20 });
+  pre.setRow(6, { A: 'CA37556D-2', B: '', C: new Date(2025, 9, 1), D: 'Figure Two', I: 4500000000022, L: 1, M: 80, N: 80 });
+  pre.setRow(7, { A: 'CA32181D-1', B: '', C: new Date(2025, 6, 3), D: 'Zirconia', I: 4500000000033, L: 1, M: 60, N: 60 });
+  const ca2025 = new FakeSheet('2025已出貨 CA', 51, [{ A: ' Order #' }]);
+  const y2025 = new FakeBook('Y2025', [ca2025]);
+  installFake({ MAIN: SpreadsheetApp.openById('MAIN'), POPW: SpreadsheetApp.openById('POPW'), Y2025: y2025 });
+  const order = baseOrder({ name: 'CA53191D', source: 'shopify_draft_order', lines: [
+    L('CA37556D\tFigure One\t(4500000000011)\t2026-10-15', 80, { sku: '' }),
+    L('CA37556D-2\tFigure Two\t(4500000000022)\t2026-10-15', 0, { sku: '' })] });
+  const { session, plan } = run(order, settings);
+  assert.deepEqual(plan.errors, []);
+  assert.deepEqual(plan.actions.filter((a) => a.op === 'appendShipped').map((a) => a.values.A), ['CA37556D-1', 'CA37556D-2']);
+  assert.ok(plan.notes.some((n) => /CA37556D：出貨單上沒有編號，對應到預購表第 5 列的 CA37556D-1/.test(n)));
+  session.execute(plan);
+  assert.equal(pre.get('B5').v, 'Y');
+  assert.equal(ca2025.get('A2').v, 'CA37556D-1');
+  // 只有一個候選：用品名或「只有這一個」對到
+  const p2 = run(baseOrder({ name: 'CA53166D', source: 'shopify_draft_order', lines: [L('CA32181D Megalomaria Zirconia', 0, { sku: '' })] }), settings).plan;
+  assert.deepEqual(p2.errors, []);
+  assert.equal(p2.actions.find((a) => a.op === 'appendShipped').values.A, 'CA32181D-1');
+});
