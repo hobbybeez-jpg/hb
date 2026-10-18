@@ -106,7 +106,7 @@ N 欄（原單手續費）留空、原單的保險不會自動加到 L 欄，預
 | M Shipping Cost | 線上寄送：第一項留空（之後填實際運費），第二項起 0、灰色；自取：每項 0、青色；PW：每項留空、橘色；POS：0 |
 | N Platform Fee | 第一項＝手續費（Shopify Payments 的 fees 或 PayPal receipt 裡的 fee，現金 0）；有預購的混合單按已付金額比例只算現貨部分 |
 | INT | 要等報價、客人付完運費 invoice 才處理（運費還是 $0 或 partially paid 時是「等待中」）；L＝補上的運費，N＝第一筆付款的手續費，O＝補運費那筆的手續費 |
-| PW | 運送方式是「Do not Ship. Store at my Private Warehouse」，或訂單裡有「Store this order at my Private Warehouse」這個服務商品（商品本身不記錄）。已出貨照常記（M 橘色），另外在 PW/PO 的「PO/PW」分頁新增：C=`PW`（灰底）、D=訂單日期、E 單號、F 品名、G UPC、I 數量、J email，H/L/M/P/Q 公式從上一列複製 |
+| PW | 運送方式是「Do not Ship. Store at my Private Warehouse」（舊的服務商品「Store this order at my Private Warehouse」已停用，只略過不記錄）。已出貨照常記（M 橘色），另外在 PW/PO 的「PO/PW」分頁新增：C=`PW`（灰底）、D=訂單日期、E 單號、F 品名、G UPC、I 數量、J email，H/L/M/P/Q 公式從上一列複製 |
 | 預購 | 只記在「預購」分頁：A 單號、B（backorder＝`backorder`；只有預購而且有付運費＝`shipping paid` 藍底）、C 日期、D 品名（去掉款式和 [Backorder]）、I UPC、L 數量、M 單價應付、N 已付總額。訂金：M＝訂金×5−0.01（不是 .99 結尾會警告）。有折扣時 M 和 N 都扣。J、K 公式從上一列複製；O＝訂金 `=M*L-N`，全額 `---` |
 | 原單資料 | 預購/backorder 每個商品在控制台「原單資料」存一列：分到的保險等服務費（平分給原單的預購商品）、原單手續費（按已付金額比例）、整張原單預付的運費。出貨時原單可能已經超過 60 天讀不到，就用這份資料 |
 | 訂貨 | 預購/backorder 的 UPC 在「訂貨」B 欄找不到時，在最後一筆資料下面新增 A 品名、B UPC、C Pre-Order Deadline（從商品敘述 `Pre-Order Deadline: 2026-10-23` 讀） |

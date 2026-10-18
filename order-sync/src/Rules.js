@@ -24,6 +24,7 @@ var RULES_COLORS = {
 var RULES_RE = {
   service: /Damage\s*&\s*Loss Insurance|Gift Wrapping|Private Warehouse Storage Fee/i,
   shippingLike: /shipping/i,
+  // 「Store this order at my Private Warehouse」：舊的 PW 服務商品（已停用，現在用運送方式），不記錄
   skip: /^Gift Card\b|Coin Exchange|^Transaction Fee$|^Cancellation Fee$|Store (this order )?at my Private Warehouse/i,
   // 關稅（Duties (US)、Prepaid Duties (US)…）：只看沒有 SKU／Barcode 的自訂收費，避免排除名稱剛好有 Duty 的商品
   duties: /\bdut(y|ies)\b|關稅/i,
@@ -34,8 +35,6 @@ var RULES_RE = {
   upcInName: /\((\d{6,14})\)/,
   pickup: /Vancouver \(Renfrew\)|Pick-?\s?up|Pick up in store/i,
   pw: /^\s*Do not Ship\.?\s*Store at my Private Warehouse/i,
-  // 新訂單改用這個服務商品選擇 PW 存放（商品本身不記錄）
-  pwService: /Store (this order )?at my Private Warehouse/i,
   deadline: /Pre-?Order\s*Deadline\s*:?\s*(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/i
 };
 
@@ -130,7 +129,7 @@ function rulesOrderFacts(order, options) {
   var services = lines.filter(function (l) { return l.kind === 'service'; });
   var title = String(order.shippingTitle || '');
   var isPickup = RULES_RE.pickup.test(title);
-  var isPW = RULES_RE.pw.test(title) || (order.lines || []).some(function (l) { return rulesNum(l.qty) > 0 && RULES_RE.pwService.test(String(l.name || '')); });
+  var isPW = RULES_RE.pw.test(title);
   var country = String(order.country || '').toUpperCase();
   var region = (!isPickup && !isPW && country && country !== 'CA' && country !== 'US') ? 'INT' : 'CA';
   var servicesTotal = rulesRound2(services.reduce(function (s, l) { return s + rulesLineTotal(l); }, 0));
