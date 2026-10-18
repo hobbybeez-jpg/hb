@@ -460,3 +460,10 @@ test('一般網站訂單裡也有 POPW 商品（CA52750D）：現貨用訂單單
   assert.deepEqual(ops(p, 'appendShipped').map((r) => r.values.A), ['CA52750D-1', 'CA52750D-2', 'CA52750D-3', 'CA42482D-11', 'CA42482D-22']);
   assert.equal(ops(p, 'updatePreorder')[1].paidAfter, 149.99);
 });
+
+test('「Store this order at my Private Warehouse」是服務，不記錄、不佔編號', () => {
+  const p = planOrder(order({ lines: [line('Store this order at my Private Warehouse', 0, { sku: '' }), line('Figure', 50), line('P - Pay in full', 60, { sku: '22', requiresShipping: false })] }));
+  assert.deepEqual(ops(p, 'appendShipped').map((r) => r.values.A), ['CA1000D-1']);
+  assert.deepEqual(ops(p, 'appendPreorder').map((r) => r.values.A), ['CA1000D-2']);
+  assert.ok(p.notes.some((n) => /Store this order/.test(n)));
+});

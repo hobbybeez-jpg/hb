@@ -64,7 +64,8 @@ N 欄（原單手續費）留空、原單的保險不會自動加到 L 欄，預
 ### 批次：找出還沒登記的單，一次寫入
 
 左邊「找未登記的訂單」選日期範圍（預設最近 3 天，最多 31 天），按「掃描」。範圍內**下單或有更新**的單都會列出來，
-所以之前下單、這幾天才付清運費的 INT 單也會被抓到。程式會從最早的單開始逐張判斷：
+所以之前下單、這幾天才付清運費的 INT 單也會被抓到。下單日在範圍之前的舊單，只有在這段期間**有新的付款**時才處理；
+只是出貨、修改之類的更新會顯示「略過」（預購出貨後預購表那一列可能已經刪掉，不能再登記一次）。程式會從最早的單開始逐張判斷：
 
 | 狀態 | 意思 |
 |---|---|
@@ -109,7 +110,7 @@ N 欄（原單手續費）留空、原單的保險不會自動加到 L 欄，預
 | 預購 | 只記在「預購」分頁：A 單號、B（backorder＝`backorder`；只有預購而且有付運費＝`shipping paid` 藍底）、C 日期、D 品名（去掉款式和 [Backorder]）、I UPC、L 數量、M 單價應付、N 已付總額。訂金：M＝訂金×5−0.01（不是 .99 結尾會警告）。有折扣時 M 和 N 都扣。J、K 公式從上一列複製；O＝訂金 `=M*L-N`，全額 `---` |
 | 原單資料 | 預購/backorder 每個商品在控制台「原單資料」存一列：分到的保險等服務費（平分給原單的預購商品）、原單手續費（按已付金額比例）、整張原單預付的運費。出貨時原單可能已經超過 60 天讀不到，就用這份資料 |
 | 訂貨 | 預購/backorder 的 UPC 在「訂貨」B 欄找不到時，在最後一筆資料下面新增 A 品名、B UPC、C Pre-Order Deadline（從商品敘述 `Pre-Order Deadline: 2026-10-23` 讀） |
-| 不記錄 | Gift Card、Coin Exchange、Transaction Fee、Cancellation Fee，以及任何關稅（沒有 SKU 的自訂收費，名稱有 Duty／Duties／關稅，例如 Duties (US)、Prepaid Duties (US)），會在預覽裡列出 |
+| 不記錄 | Gift Card、Coin Exchange、Transaction Fee、Cancellation Fee、Store this order at my Private Warehouse，以及任何關稅（沒有 SKU 的自訂收費，名稱有 Duty／Duties／關稅，例如 Duties (US)、Prepaid Duties (US)），會在預覽裡列出 |
 | H Supplier | 留空，人工填 |
 
 ### POPW 出貨單（Draft 單，商品名稱是 `CA46701D⇥品名⇥(UPC)⇥日期`）
