@@ -460,3 +460,24 @@ test('一般網站訂單裡也有 POPW 商品（CA52750D）：現貨用訂單單
   assert.deepEqual(ops(p, 'appendShipped').map((r) => r.values.A), ['CA52750D-1', 'CA52750D-2', 'CA52750D-3', 'CA42482D-11', 'CA42482D-22']);
   assert.equal(ops(p, 'updatePreorder')[1].paidAfter, 149.99);
 });
+
+test('「Store this order at my Private Warehouse」是服務，不記錄、不佔編號', () => {
+  const p = planOrder(order({ lines: [line('Store this order at my Private Warehouse', 0, { sku: '' }), line('Figure', 50), line('P - Pay in full', 60, { sku: '22', requiresShipping: false })] }));
+  assert.deepEqual(ops(p, 'appendShipped').map((r) => r.values.A), ['CA1000D-1']);
+  assert.deepEqual(ops(p, 'appendPreorder').map((r) => r.values.A), ['CA1000D-2']);
+  assert.ok(p.notes.some((n) => /Store this order/.test(n)));
+});
+
+test('舊的 PW 服務商品「Store this order at my Private Warehouse」只略過，不會把訂單當成 PW', () => {
+  const p = planOrder(order({ shippingTitle: 'Flat Rate Shipping', lines: [line('Store this order at my Private Warehouse', 0, { sku: '' }), line('Figure', 50)] }));
+  const r = ops(p, 'appendShipped')[0];
+  assert.deepEqual([r.values.A, r.values.M, r.colors.M], ['CA1000D', '', undefined]);
+  assert.equal(ops(p, 'appendPW').length, 0);
+});
+
+test('POPW：沒寫編號、候選有好幾個又對不出來 → 錯誤，請手動', () => {
+  const cands = [{ code: 'CA5D-1', row: 1, D: 'A', I: 1 }, { code: 'CA5D-2', row: 2, D: 'B', I: 2 }];
+  const ctx = Object.assign(ctxWith({}), { preorderCandidates: () => cands });
+  const p = planOrder(draft({ lines: [popwLine('CA5D', 'Something Else', '9', 0)] }), ctx);
+  assert.match(p.errors.join(), /好幾個 CA5D-N（CA5D-1、CA5D-2）/);
+});

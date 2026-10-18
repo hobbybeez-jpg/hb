@@ -237,6 +237,10 @@ function apiScanChunk(orders, start) {
     if (o.cancelled || o.test) {
       item.status = 'skip';
       item.note = o.cancelled ? '已取消' : '測試訂單';
+    } else if (o.old && !o.newPayment) {
+      // 下單日在範圍之前，這段期間只是出貨、修改之類的更新：之前已經處理過（預購出貨後預購表那一列可能已經刪掉，不能再登記）
+      item.status = 'skip';
+      item.note = '舊單：下單日在掃描範圍之前，這段期間沒有新的付款，不處理';
     } else if (logEntriesFor_(o.name).length) {
       item.status = 'done';
       item.note = '「紀錄」分頁顯示已寫入過';

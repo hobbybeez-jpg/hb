@@ -190,20 +190,48 @@ SheetsSession.prototype.preorderData = function () {
 // 給 Rules.planOrder 用的 ctx
 SheetsSession.prototype.context = function (order) {
   var self = this;
+  function preorderRow(d, i) {
+    var v = d.values[i];
+    return {
+      code: String(v[0]).trim().toUpperCase(), row: i + 1, B: v[1], C: self.formatDate(v[2]), D: String(v[3]).trim(), I: v[8], L: v[11], M: v[12],
+      N: d.nFormulas[i][0] || v[13], Nvalue: Number(v[13]) || 0
+    };
+  }
   var orderYear = Number(String(order.date).slice(0, 4));
   return {
     findPreorder: function (code) {
       var d = self.preorderData();
       var want = code.toUpperCase();
       for (var i = 0; i < d.values.length; i++) {
-        if (String(d.values[i][0]).trim().toUpperCase() !== want) continue;
-        var v = d.values[i];
-        return {
-          row: i + 1, B: v[1], C: self.formatDate(v[2]), D: String(v[3]).trim(), I: v[8], L: v[11], M: v[12],
-          N: d.nFormulas[i][0] || v[13], Nvalue: Number(v[13]) || 0
-        };
+        if (String(d.values[i][0]).trim().toUpperCase() === want) return preorderRow(d, i);
       }
       return null;
+    },
+    // 同一張原單的 CA…D-1、-2…（出貨單上沒寫編號時用）
+    preorderCandidates: function (base) {
+      var d = self.preorderData();
+      var re = new RegExp('^' + base + '-\\d+$', 'i');
+      var out = [];
+      for (var i = 0; i < d.values.length; i++) if (re.test(String(d.values[i][0]).trim())) out.push(preorderRow(d, i));
+      return out;
+    },
+    shippedCandidates: function (base) {
+      var re = new RegExp('^' + base + '-\\d+$', 'i');
+      var out = [];
+      self.shippedYears(orderYear).forEach(function (y) {
+        ['CA', 'INT'].forEach(function (region) {
+          var ref = self.shippedSheet(y, region);
+          if (!ref) return;
+          var col = self.columnValues(ref, 1);
+          for (var i = 0; i < col.length; i++) {
+            var a = String(col[i]).trim();
+            if (!re.test(a)) continue;
+            out.push({ code: a.toUpperCase(), file: ref.file, tab: ref.tab, row: i + 1, D: self.columnValues(ref, SHEETS_COL.D)[i],
+              L: self.columnValues(ref, SHEETS_COL.L)[i], O: self.columnValues(ref, SHEETS_COL.O)[i], C: self.columnValues(ref, SHEETS_COL.C)[i] });
+          }
+        });
+      });
+      return out;
     },
     findShipped: function (code) {
       var years = self.shippedYears(orderYear);

@@ -126,7 +126,7 @@ function shopifyRecentOrders(n) {
   });
 }
 
-var SHOPIFY_LIST_QUERY = 'query List($q: String!, $after: String) { orders(first: 100, after: $after, sortKey: CREATED_AT, query: $q) { nodes { name createdAt sourceName displayFinancialStatus cancelledAt test } pageInfo { hasNextPage endCursor } } }';
+var SHOPIFY_LIST_QUERY = 'query List($q: String!, $after: String) { orders(first: 50, after: $after, sortKey: CREATED_AT, query: $q) { nodes { name createdAt sourceName displayFinancialStatus cancelledAt test transactions(first: 10) { kind status createdAt test } } pageInfo { hasNextPage endCursor } } }';
 
 // 某段日期（溫哥華時間，含頭尾兩天）內「建立或有更新」的訂單，從舊到新。
 // 用更新時間是為了抓到之前下單、這幾天才付清運費（INT）或改過的單
@@ -139,13 +139,19 @@ function shopifyListOrders(fromDate, toDate) {
   var q = "updated_at:>='" + from.toISOString() + "' created_at:<='" + to.toISOString() + "'";
   var out = [];
   var after = null;
-  for (var page = 0; page < 10; page++) {
+  for (var page = 0; page < 20; page++) {
     var data = shopifyGraphql(SHOPIFY_LIST_QUERY, { q: q, after: after });
     var conn = data.orders || { nodes: [], pageInfo: {} };
     conn.nodes.forEach(function (o) {
+      // 最後一次收到款項的時間（下單日在範圍之前的舊單，只有這段期間有新付款才需要處理，例如 INT 補付運費）
+      var lastPayment = (o.transactions || []).filter(function (t) {
+        return t.status === 'SUCCESS' && (t.kind === 'SALE' || t.kind === 'CAPTURE') && !t.test;
+      }).map(function (t) { return t.createdAt; }).sort().pop() || '';
       out.push({
         name: shopifyCleanName(o.name), createdAt: o.createdAt, source: o.sourceName,
-        status: String(o.displayFinancialStatus || '').toLowerCase(), cancelled: !!o.cancelledAt, test: !!o.test
+        status: String(o.displayFinancialStatus || '').toLowerCase(), cancelled: !!o.cancelledAt, test: !!o.test,
+        old: new Date(o.createdAt) < from,
+        newPayment: !!lastPayment && new Date(lastPayment) >= from
       });
     });
     if (!conn.pageInfo || !conn.pageInfo.hasNextPage) break;
