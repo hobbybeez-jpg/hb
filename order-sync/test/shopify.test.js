@@ -40,6 +40,8 @@ test('PayPal 手續費從 receipt 讀', () => {
 
 test('現金沒有手續費；Shopify Payments 還沒有 fees 時回傳 null', () => {
   assert.equal(shopifyTransactionFee({ gateway: 'Cash', fees: [] }).fee, 0);
+  assert.equal(shopifyTransactionFee({ gateway: 'Interac e-Transfer', fees: [] }).fee, 0);
+  assert.equal(shopifyTransactionFee({ gateway: 'E-Transfer', fees: [] }).fee, 0);
   assert.equal(shopifyTransactionFee({ gateway: 'shopify_payments', fees: [] }).fee, null);
   assert.equal(shopifyTransactionFee({ gateway: 'paypal', fees: [], receiptJson: '{}' }).fee, null);
 });

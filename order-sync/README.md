@@ -104,7 +104,7 @@ N 欄（原單手續費）留空、原單的保險不會自動加到 L 欄，預
 | K Sales Price | 單價 × 數量 − 這個商品分到的折扣（用 Shopify 自己的折扣分配，整單折扣碼是按金額比例分攤） |
 | L Shipping Charged | 第一項＝運費（扣掉運費折扣）＋保險＋禮品包裝＋Storage Fee＋運費類自訂商品；第二項起 0 |
 | M Shipping Cost | 線上寄送：第一項留空（之後填實際運費），第二項起 0、灰色；自取：每項 0、青色；PW：每項留空、橘色；POS：0 |
-| N Platform Fee | 第一項＝手續費（Shopify Payments 的 fees 或 PayPal receipt 裡的 fee，現金 0）；有預購的混合單按已付金額比例只算現貨部分 |
+| N Platform Fee | 第一項＝手續費（Shopify Payments 的 fees 或 PayPal receipt 裡的 fee，現金、Interac e-Transfer 為 0）；有預購的混合單按已付金額比例只算現貨部分 |
 | INT | 要等報價、客人付完運費 invoice 才處理（運費還是 $0 或 partially paid 時是「等待中」）；L＝補上的運費，N＝第一筆付款的手續費，O＝補運費那筆的手續費 |
 | PW | 運送方式是「Do not Ship. Store at my Private Warehouse」（舊的服務商品「Store this order at my Private Warehouse」已停用，只略過不記錄）。已出貨照常記（M 橘色），另外在 PW/PO 的「PO/PW」分頁新增：C=`PW`（灰底）、D=訂單日期、E 單號、F 品名、G UPC、I 數量、J email，H/L/M/P/Q 公式從上一列複製 |
 | 預購 | 只記在「預購」分頁：A 單號、B（backorder＝`backorder`；只有預購而且有付運費＝`shipping paid` 藍底）、C 日期、D 品名（去掉款式和 [Backorder]）、I UPC、L 數量、M 單價應付、N 已付總額。訂金：M＝訂金×5−0.01（不是 .99 結尾會警告）。有折扣時 M 和 N 都扣。J、K 公式從上一列複製；O＝訂金 `=M*L-N`，全額 `---` |

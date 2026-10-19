@@ -194,7 +194,8 @@ function shopifyTransactionFee(tx) {
     var p = paypalFeeFromReceipt(tx.receiptJson);
     return p ? { fee: p.fee, note: 'PayPal receipt: ' + p.key } : { fee: null, note: 'PayPal receipt 裡找不到 fee' };
   }
-  if (/cash|gift_card|manual|custom|bogus|shop_cash|store_credit/.test(gateway)) return { fee: 0, note: gateway + ' 沒有手續費' };
+  // Interac e-Transfer 是直接轉帳，沒有手續費（POS 刷 Interac 卡走 Shopify Payments，上面已用實際 fees）
+  if (/cash|gift_card|manual|custom|bogus|shop_cash|store_credit|interac|e-?transfer/.test(gateway)) return { fee: 0, note: gateway + ' 沒有手續費' };
   return { fee: null, note: gateway + ' 還沒有手續費資料' };
 }
 
