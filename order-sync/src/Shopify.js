@@ -150,7 +150,7 @@ function shopifyRecentOrders(n) {
   });
 }
 
-var SHOPIFY_LIST_QUERY = 'query List($q: String!, $after: String) { orders(first: 50, after: $after, sortKey: CREATED_AT, query: $q) { nodes { name createdAt sourceName displayFinancialStatus cancelledAt test transactions(first: 10) { kind status createdAt test } } pageInfo { hasNextPage endCursor } } }';
+var SHOPIFY_LIST_QUERY = 'query List($q: String!, $after: String, $sort: OrderSortKeys) { orders(first: 50, after: $after, sortKey: $sort, query: $q) { nodes { name createdAt updatedAt sourceName displayFinancialStatus cancelledAt test transactions(first: 10) { kind status createdAt test } } pageInfo { hasNextPage endCursor } } }';
 
 // 某段日期（溫哥華時間，含頭尾兩天）內「建立或有更新」的訂單，從舊到新。
 // 用更新時間是為了抓到之前下單、這幾天才付清運費（INT）或改過的單
@@ -160,11 +160,21 @@ function shopifyListOrders(fromDate, toDate) {
   var to = Utilities.parseDate(toDate + ' 23:59:59', tz, 'yyyy-MM-dd HH:mm:ss');
   if (isNaN(from.getTime()) || isNaN(to.getTime()) || from > to) throw new Error('日期範圍不對：' + fromDate + ' ～ ' + toDate);
   if ((to - from) / 86400000 > 31) throw new Error('一次最多掃 31 天。');
+  return shopifyListRange_(from, to, from, 'CREATED_AT');
+}
+
+// 自動執行用：updatedFrom 之後有更新、to 之前下單的訂單，照更新時間從舊到新。
+// oldBefore：在這之前下單的算舊單（只有 oldBefore 之後有新付款才處理）
+function shopifyListUpdated(updatedFrom, to, oldBefore) {
+  return shopifyListRange_(updatedFrom, to, oldBefore, 'UPDATED_AT');
+}
+
+function shopifyListRange_(from, to, oldBefore, sortKey) {
   var q = "updated_at:>='" + from.toISOString() + "' created_at:<='" + to.toISOString() + "'";
   var out = [];
   var after = null;
   for (var page = 0; page < 20; page++) {
-    var data = shopifyGraphql(SHOPIFY_LIST_QUERY, { q: q, after: after });
+    var data = shopifyGraphql(SHOPIFY_LIST_QUERY, { q: q, after: after, sort: sortKey });
     var conn = data.orders || { nodes: [], pageInfo: {} };
     conn.nodes.forEach(function (o) {
       // 最後一次收到款項的時間（下單日在範圍之前的舊單，只有這段期間有新付款才需要處理，例如 INT 補付運費）
@@ -172,10 +182,10 @@ function shopifyListOrders(fromDate, toDate) {
         return t.status === 'SUCCESS' && (t.kind === 'SALE' || t.kind === 'CAPTURE') && !t.test;
       }).map(function (t) { return t.createdAt; }).sort().pop() || '';
       out.push({
-        name: shopifyCleanName(o.name), createdAt: o.createdAt, source: o.sourceName,
+        name: shopifyCleanName(o.name), createdAt: o.createdAt, updatedAt: o.updatedAt, source: o.sourceName,
         status: String(o.displayFinancialStatus || '').toLowerCase(), cancelled: !!o.cancelledAt, test: !!o.test,
-        old: new Date(o.createdAt) < from,
-        newPayment: !!lastPayment && new Date(lastPayment) >= from
+        old: new Date(o.createdAt) < oldBefore,
+        newPayment: !!lastPayment && new Date(lastPayment) >= oldBefore
       });
     });
     if (!conn.pageInfo || !conn.pageInfo.hasNextPage) break;
