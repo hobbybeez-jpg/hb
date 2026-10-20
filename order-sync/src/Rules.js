@@ -21,6 +21,9 @@ var RULES_COLORS = {
   yellow: '#ffff00'
 };
 
+// 控制台「原單資料」G 欄：D 欄是整張原單的手續費（記在第一個出貨的商品）。空白＝舊規則，D 是這一項按比例分到的
+var RULES_FEE_FULL = '全額';
+
 var RULES_RE = {
   service: /Damage\s*&\s*Loss Insurance|Gift Wrapping|Private Warehouse Storage Fee/i,
   shippingLike: /shipping/i,
@@ -120,7 +123,10 @@ function rulesOrderFacts(order, options) {
   var lines = (order.lines || []).map(function (line, i) {
     return Object.assign({}, line, { index: i, kind: classifyLine(line, order) });
   });
+  var discountMoved = rulesMoveServiceDiscount(lines);
   var counted = lines.filter(function (l) { return l.kind === 'stock' || l.kind === 'preorder' || l.kind === 'backorder'; });
+  // 有兩個以上出貨地點時，照 Shopify 後台訂單頁的分組順序編號（同一組照商品順序）
+  counted.sort(function (a, b) { return (a.group || 0) - (b.group || 0) || a.index - b.index; });
   if (options.numbering !== 'shopify') {
     counted = counted.filter(function (l) { return l.kind === 'stock'; })
       .concat(counted.filter(function (l) { return l.kind !== 'stock'; }));
@@ -145,6 +151,7 @@ function rulesOrderFacts(order, options) {
     services: services,
     skipped: lines.filter(function (l) { return l.kind === 'skip'; }),
     servicesTotal: servicesTotal,
+    discountMoved: discountMoved,
     // 保險、禮品包裝、Storage Fee（不含運費類的自訂商品）
     extras: rulesRound2(servicesTotal - shippingLines),
     shippingPaid: rulesRound2(rulesNum(order.shippingCharged) + shippingLines),
@@ -159,14 +166,30 @@ function rulesOrderFacts(order, options) {
   };
 }
 
-// 原單「已付金額」的分配基準：商品（訂金只算訂金）＋運費＋服務費
-// 有預購商品時，保險等服務費算在預購商品（出貨時平分記到 L 欄），不算在現貨
-function rulesPaidWeights(facts) {
-  var extrasToPre = facts.pre.length ? facts.extras : 0;
-  var stockPart = facts.stock.reduce(function (s, l) { return s + rulesLineTotal(l); }, 0) + facts.shippingPaid + (facts.extras - extrasToPre);
+// 整單折扣碼也會分一部分給保險等服務費（在 Shopify 是商品）：移回要記錄的商品，按商品金額比例；服務費維持原價
+function rulesMoveServiceDiscount(lines) {
+  var from = lines.filter(function (l) { return l.kind === 'service' && RULES_RE.service.test(l.name) && rulesNum(l.discount) > 0; });
+  var to = lines.filter(function (l) { return l.kind === 'stock' || l.kind === 'preorder' || l.kind === 'backorder'; });
+  if (!from.length || !to.length) return 0;
+  var moved = rulesRound2(from.reduce(function (s, l) { return s + rulesNum(l.discount); }, 0));
+  from.forEach(function (l) { l.discount = 0; });
+  rulesAllocate(moved, to.map(function (l) { return rulesNum(l.unitPrice) * rulesNum(l.qty); })).forEach(function (d, i) {
+    to[i].discount = rulesRound2(rulesNum(to[i].discount) + d);
+  });
+  return moved;
+}
+
+// 原單手續費全額記在原單第一個出貨的商品（有現貨就是第一項現貨）。INT 有現貨時 N 只記第一筆付款，補運費那筆記在現貨的 O
+function rulesOrigFeeTarget(facts) {
+  return facts.region === 'INT' && facts.stock.length ? facts.fees.first : facts.fees.total;
+}
+
+// 原單其他商品已經記在已出貨 N 欄的手續費
+function rulesRecordedFee(ctx, base) {
+  var cands = ctx.shippedCandidates ? ctx.shippedCandidates(base) : [];
   return {
-    stockPart: rulesRound2(stockPart),
-    total: rulesRound2(stockPart + extrasToPre + facts.pre.reduce(function (s, l) { return s + rulesLineTotal(l); }, 0))
+    sum: rulesRound2(cands.reduce(function (s, c) { return s + rulesNum(c.N); }, 0)),
+    blank: cands.filter(function (c) { return c.N === '' || c.N == null; }).map(function (c) { return c.code; })
   };
 }
 
@@ -218,6 +241,17 @@ function planOrder(order, ctx, options) {
   if (/refunded/i.test(order.financialStatus || '')) plan.warnings.push('這張單有退款（' + order.financialStatus + '），寫入的是目前剩下的商品，請確認。');
   if (facts.fees.unknown.length) plan.warnings.push('讀不到手續費：' + facts.fees.unknown.join(', ') + '。手續費欄會留空。');
   facts.skipped.forEach(function (l) { plan.notes.push('不記錄：' + l.name + '（$' + rulesLineTotal(l) + '）'); });
+  if (facts.discountMoved) plan.notes.push('保險等服務費分到的折扣 $' + facts.discountMoved + ' 移回商品（按商品金額比例），服務費維持原價。');
+  var places = [];
+  facts.counted.forEach(function (l) {
+    var last = places[places.length - 1];
+    if (last && last.group === (l.group || 0)) last.codes.push(l.code.replace(order.name, ''));
+    else places.push({ group: l.group || 0, name: l.location || '?', codes: [l.code.replace(order.name, '')] });
+  });
+  if (places.length > 1 && facts.counted.some(function (l) { return l.location; })) {
+    plan.notes.push('出貨地點有 ' + places.length + ' 組，照 Shopify 後台的分組編號：' + places.map(function (x) { return x.name + '（' + x.codes.join('、') + '）'; }).join('，') + '。');
+  }
+  if (order.groupError && facts.counted.length > 1) plan.warnings.push('讀不到出貨地點分組（' + order.groupError + '），編號照商品順序；有兩個出貨地點時請對照 Shopify 後台。');
   facts.lines.forEach(function (l) {
     if (l.kind === 'stock' && l.requiresShipping === false) plan.warnings.push('「' + l.name + '」在 Shopify 設定為不需寄送，但不是預購格式，先當現貨記錄，請確認。');
   });
@@ -251,10 +285,8 @@ function planOrder(order, ctx, options) {
 
 function planNewOrder(order, facts, ctx, plan) {
   var platform = facts.isPOS ? 'Store' : 'Shopify';
-  var weights = rulesPaidWeights(facts);
-  var stockFeeShare = weights.total > 0 ? weights.stockPart / weights.total : 1;
   if (facts.pre.length && facts.stock.length) {
-    plan.notes.push('現貨和預購混合：手續費按已付金額比例分攤，現貨部分佔 ' + Math.round(stockFeeShare * 1000) / 10 + '%。');
+    plan.notes.push('現貨和預購混合：手續費全額記在第一項現貨，預購商品出貨時 N 記 0。');
   }
   var feeN, feeO;
   if (facts.region === 'INT') {
@@ -262,7 +294,6 @@ function planNewOrder(order, facts, ctx, plan) {
   } else {
     feeN = facts.fees.total; feeO = 0;
   }
-  feeN = rulesRound2(feeN * stockFeeShare);
   var feeUnknown = facts.fees.unknown.length > 0;
 
   facts.stock.forEach(function (line, i) {
@@ -349,9 +380,10 @@ function planNewOrder(order, facts, ctx, plan) {
       op: 'saveOriginal', key: line.code, label: '原單資料（控制台）',
       values: {
         A: line.code, B: order.name, C: extrasShare,
-        D: facts.fees.unknown.length || !(weights.total > 0) ? '' : rulesRound2(facts.fees.total * (paid + extrasShare) / weights.total),
+        D: facts.fees.unknown.length ? '' : rulesOrigFeeTarget(facts),
         E: facts.stock.length ? 0 : facts.shippingPaid,
-        F: order.date
+        F: order.date,
+        G: RULES_FEE_FULL
       }
     });
     if (!upc) {
@@ -387,6 +419,7 @@ function planPopw(order, facts, ctx, plan, options) {
   var draftFee = chargesOnStock ? 0 : (facts.fees.unknown.length ? '' : facts.fees.total);
   var popwRegion = facts.region;
   var originalsCharged = {};
+  var feeAssigned = {};
   if (!chargesOnStock) {
     facts.pre.forEach(function (l) {
       plan.warnings.push('出貨單裡有不是「CA單號 品名」格式的商品：「' + l.name + '」，沒有記錄，請手動處理。');
@@ -452,6 +485,7 @@ function planPopw(order, facts, ctx, plan, options) {
       // 原單只有預購而且預付了運費：原單第一個出貨的商品加一次
       var origExtra = 0;
       var origFeeN = '';
+      var feeTarget = null;
       var saved = ctx.findSaved ? ctx.findSaved(code) : null;
       var original = saved ? null : (ctx.findOriginal ? ctx.findOriginal(base) : null);
       if (saved) {
@@ -466,7 +500,8 @@ function planPopw(order, facts, ctx, plan, options) {
           plan.notes.push(code + '：原單預付的運費 $' + saved.prepaid + ' 加到 L 欄（原單第一個出貨的商品）。');
         }
         if (saved.fee === '' || saved.fee == null) plan.warnings.push(code + '：原單記錄時沒有讀到手續費，N 欄留空。');
-        else origFeeN = rulesNum(saved.fee);
+        else if (saved.full) feeTarget = rulesNum(saved.fee);
+        else origFeeN = rulesNum(saved.fee); // 舊規則存的：這一項按比例分到的手續費
       } else if (original) {
         var of = rulesOrderFacts(original, options);
         var origLine = rulesFindOriginalLine(of, code, pre);
@@ -482,17 +517,21 @@ function planPopw(order, facts, ctx, plan, options) {
           originalsCharged[base] = true;
           plan.notes.push(code + '：原單預付的運費 $' + of.shippingPaid + ' 加到 L 欄（原單第一個出貨的商品）。');
         }
-        var weights = rulesPaidWeights(of);
-        if (of.fees.unknown.length) {
-          plan.warnings.push(code + '：原單 ' + base + ' 讀不到手續費，N 欄留空。');
-        } else if (!origLine) {
-          plan.warnings.push(code + '：在原單 ' + base + ' 找不到對應的商品，N 欄留空。');
-        } else {
-          var share = weights.total > 0 ? (rulesLineTotal(origLine) + extrasShare) / weights.total : 0;
-          origFeeN = rulesRound2(of.fees.total * share);
-        }
+        if (of.fees.unknown.length) plan.warnings.push(code + '：原單 ' + base + ' 讀不到手續費，N 欄留空。');
+        else feeTarget = rulesOrigFeeTarget(of);
       } else {
         plan.warnings.push(code + '：讀不到原單 ' + base + '，N 欄（原單手續費）留空，原單的保險／運費也沒有加到 L 欄。');
+      }
+      // 原單手續費全額記在第一個出貨的商品：扣掉同一張原單已經記在已出貨 N 欄的（含這張出貨單前面幾項）
+      if (feeTarget != null) {
+        var rec = rulesRecordedFee(ctx, base);
+        var recorded = rulesRound2(rec.sum + (feeAssigned[base] || 0));
+        origFeeN = rulesRound2(Math.max(0, feeTarget - recorded));
+        feeAssigned[base] = rulesRound2((feeAssigned[base] || 0) + origFeeN);
+        if (rec.blank.length) plan.warnings.push(code + '：原單 ' + base + ' 已出貨的 ' + rec.blank.join('、') + ' N 欄是空的，這一項的原單手續費請確認。');
+        if (!recorded) plan.notes.push(code + '：原單手續費 $' + feeTarget + ' 全額記在這一項（原單第一個出貨的商品）。');
+        else if (origFeeN) plan.notes.push(code + '：原單手續費 $' + feeTarget + '，其他列已記 $' + recorded + '，這一項記剩下的 $' + origFeeN + '。');
+        else plan.notes.push(code + '：原單手續費 $' + feeTarget + ' 已經記在同一張原單的其他列，這一項 N 記 0。');
       }
 
       var values = {
@@ -601,7 +640,7 @@ function rulesFindOriginalLine(of, code, pre) {
 
 if (typeof module !== 'undefined') {
   module.exports = {
-    RULES_COLORS: RULES_COLORS, RULES_RE: RULES_RE, planOrder: planOrder, classifyLine: classifyLine,
+    RULES_COLORS: RULES_COLORS, RULES_RE: RULES_RE, RULES_FEE_FULL: RULES_FEE_FULL, planOrder: planOrder, classifyLine: classifyLine,
     rulesOrderFacts: rulesOrderFacts, rulesAllocate: rulesAllocate, rulesCleanName: rulesCleanName,
     rulesUpcKey: rulesUpcKey, rulesRound2: rulesRound2, rulesFeeInfo: rulesFeeInfo, classifyPlan: classifyPlan
   };

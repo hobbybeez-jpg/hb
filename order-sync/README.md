@@ -28,7 +28,7 @@
 
    整個網址直接貼上也可以，會自動取出 ID。每年新增獨立年份檔時，加一列 `YEAR_SHEET_2026` 之類。
 5. **Shopify app**：在 Shopify Dev Dashboard 建一個只給這個工具用的 app（和 Receiving Tracker 的做法一樣），
-   Scopes 填 `read_orders,read_products`，App URL 填 `https://example.com`（這個工具用不到），安裝到商店，
+   Scopes 填 `read_orders,read_products,read_all_orders,read_merchant_managed_fulfillment_orders`，App URL 填 `https://example.com`（這個工具用不到），安裝到商店，
    然後用選單 **設定 Shopify 金鑰** 貼上 Client ID 和 Client secret。
    （2026 年以前在後台建的舊式 custom app，可以在第一個問題留空，改貼 `shpat_…` token。）
    金鑰存在 Apps Script 的指令碼屬性，不會出現在試算表裡。
@@ -54,8 +54,12 @@
 注意：`CLASPRC_JSON` 等於你 Google 帳號編輯 Apps Script 的權限，只放在 GitHub secret，不要貼到別的地方。
 推上去會**覆蓋**整個 Apps Script 專案的程式（設定、金鑰、「設定」「紀錄」分頁都不受影響），所以請不要直接在 Apps Script 編輯器裡改程式，要改就改 repo。
 
-沒有 `read_all_orders`（Dev Dashboard 不接受這個權限），所以只讀得到最近 60 天的訂單：POPW 出貨單的原單超過 60 天時，
+沒有 `read_all_orders` 時只讀得到最近 60 天的訂單：POPW 出貨單的原單超過 60 天時，
 N 欄（原單手續費）留空、原單的保險不會自動加到 L 欄，預覽會用黃色提示，請人工補上。
+
+沒有 `read_merchant_managed_fulfillment_orders` 時讀不到出貨地點分組，多件訂單的編號照商品順序，預覽會用黃色提示。
+新增權限：Dev Dashboard → app → Versions 建新版本、勾選權限後 Release，再到商店後台的 app 頁面核准（和 read_all_orders 一樣）。
+用選單 **測試 Shopify 連線** 可以看到目前有哪些權限。
 
 ## 使用
 
@@ -98,17 +102,17 @@ N 欄（原單手續費）留空、原單的保險不會自動加到 L 欄，預
 
 | 項目 | 規則 |
 |---|---|
-| 單號 | 只有一個商品：`CA53126D`；多個：`CA53126D-1`、`-2`…，**現貨先編號、預購/backorder 後編號**。保險、禮品包裝、Storage Fee、運費類自訂商品不佔編號 |
+| 單號 | 只有一個商品：`CA53126D`；多個：`CA53126D-1`、`-2`…，**現貨先編號、預購/backorder 後編號**；有兩個以上出貨地點時，照 Shopify 後台訂單頁的地點分組順序（同一組照商品順序）。保險、禮品包裝、Storage Fee、運費類自訂商品不佔編號 |
 | 分頁 | 寄送國家是加拿大、美國，或自取、PW → `{年}已出貨 CA`；其他國家 → `{年}已出貨 INT`。年份＝訂單日期（溫哥華時間）的年份 |
 | Platform | POS → `Store`；其他 → `Shopify` |
-| K Sales Price | 單價 × 數量 − 這個商品分到的折扣（用 Shopify 自己的折扣分配，整單折扣碼是按金額比例分攤） |
+| K Sales Price | 單價 × 數量 − 這個商品分到的折扣（用 Shopify 自己的折扣分配，整單折扣碼是按金額比例分攤）。保險、禮品包裝、Storage Fee 分到的折扣移回商品（按商品金額比例），服務費維持原價 |
 | L Shipping Charged | 第一項＝運費（扣掉運費折扣）＋保險＋禮品包裝＋Storage Fee＋運費類自訂商品；第二項起 0 |
 | M Shipping Cost | 線上寄送：第一項留空（之後填實際運費），第二項起 0、灰色；自取：每項 0、青色；PW：每項留空、橘色；POS：0 |
-| N Platform Fee | 第一項＝手續費（Shopify Payments 的 fees 或 PayPal receipt 裡的 fee，現金、Interac e-Transfer 為 0）；有預購的混合單按已付金額比例只算現貨部分 |
+| N Platform Fee | 第一項＝手續費（Shopify Payments 的 fees 或 PayPal receipt 裡的 fee，現金、Interac e-Transfer 為 0）。整張單的手續費全額記在第一個出貨的商品：有現貨就記在第一項現貨，預購商品出貨時 N 記 0 |
 | INT | 要等報價、客人付完運費 invoice 才處理（運費還是 $0 或 partially paid 時是「等待中」）；L＝補上的運費，N＝第一筆付款的手續費，O＝補運費那筆的手續費 |
 | PW | 運送方式是「Do not Ship. Store at my Private Warehouse」（舊的服務商品「Store this order at my Private Warehouse」已停用，只略過不記錄）。已出貨照常記（M 橘色），另外在 PW/PO 的「PO/PW」分頁新增：C=`PW`（灰底）、D=訂單日期、E 單號、F 品名、G UPC、I 數量、J email，H/L/M/P/Q 公式從上一列複製 |
 | 預購 | 只記在「預購」分頁：A 單號、B（backorder＝`backorder`；只有預購而且有付運費＝`shipping paid` 藍底）、C 日期、D 品名（去掉款式和 [Backorder]）、I UPC、L 數量、M 單價應付、N 已付總額。訂金：M＝訂金×5−0.01（不是 .99 結尾會警告）。有折扣時 M 和 N 都扣。J、K 公式從上一列複製；O＝訂金 `=M*L-N`，全額 `---` |
-| 原單資料 | 預購/backorder 每個商品在控制台「原單資料」存一列：分到的保險等服務費（平分給原單的預購商品）、原單手續費（按已付金額比例）、整張原單預付的運費。出貨時原單可能已經超過 60 天讀不到，就用這份資料 |
+| 原單資料 | 預購/backorder 每個商品在控制台「原單資料」存一列：分到的保險等服務費（平分給原單的預購商品）、整張原單的手續費（G 欄「全額」；空白是舊規則存的、這一項按比例分到的）、整張原單預付的運費。出貨時原單可能已經超過 60 天讀不到，就用這份資料 |
 | 訂貨 | 預購/backorder 的 UPC 在「訂貨」B 欄找不到時，在最後一筆資料下面新增 A 品名、B UPC、C Pre-Order Deadline（從商品敘述 `Pre-Order Deadline: 2026-10-23` 讀） |
 | 不記錄 | Gift Card、Coin Exchange、Transaction Fee、Cancellation Fee、Store this order at my Private Warehouse，以及任何關稅（沒有 SKU 的自訂收費，名稱有 Duty／Duties／關稅，例如 Duties (US)、Prepaid Duties (US)），會在預覽裡列出 |
 | H Supplier | 留空，人工填 |
@@ -121,7 +125,7 @@ N 欄（原單手續費）留空、原單的保險不會自動加到 L 欄，預
     A 原單號、B 原單日期、C `PO-Shopify`（原本是 backorder 寫 `Shopify`）、D 品名、J 數量、K 應付總額、
     L 第一項＝出貨單運費＋服務費，每一項再加上原單保險等服務費分到的那一份（平分給原單的預購商品），
     原單只有預購而且預付運費時，原單第一個出貨的商品再加上預付運費；
-    M 規則同上、N 原單手續費（按這個商品在原單的已付金額比例）、O 第一項＝出貨單的手續費。
+    M 規則同上、N 原單手續費（全額記在原單第一個出貨的商品：原單手續費減掉同一張原單已經記在已出貨 N 欄的，其他項記 0）、O 第一項＝出貨單的手續費。
   - 原單的保險、手續費優先讀控制台「原單資料」（上線後記錄的預購單都有）；沒有的話讀 Shopify 原單，
     原單超過 60 天讀不到時 N 欄留空、保險沒有加到 L 欄，預覽會用黃色提示，請人工補上。
   - 同一張原單的商品照編號從小到大寫入（-1、-2、-3…），不同原單照出貨單上的先後。
