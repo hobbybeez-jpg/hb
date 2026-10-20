@@ -5,6 +5,7 @@ const Rules = require('../src/Rules.js');
 // Sheets.js 在 Apps Script 裡和 Rules.js 共用全域變數
 global.rulesUpcKey = Rules.rulesUpcKey;
 global.RULES_COLORS = Rules.RULES_COLORS;
+global.RULES_FEE_FULL = Rules.RULES_FEE_FULL;
 const { SheetsSession, sheetsNewPaidFormula_ } = require('../src/Sheets.js');
 const { FakeSheet, FakeBook, installFake, IO } = require('./fake-sheets.js');
 

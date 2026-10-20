@@ -50,8 +50,11 @@ function setupTabs() {
   }
   var orig = book.getSheetByName(ORIGINALS_TAB) || book.insertSheet(ORIGINALS_TAB);
   if (orig.getLastRow() === 0) {
-    orig.getRange(1, 1, 1, 6).setValues([['單號', '原單', '保險等服務費（這一項分到的）', '原單手續費（這一項分到的）', '預付運費（整張原單）', '原單日期']]).setFontWeight('bold');
+    orig.getRange(1, 1, 1, 7).setValues([['單號', '原單', '保險等服務費（這一項分到的）', '原單手續費（G＝全額：整張原單；空白：這一項分到的）', '預付運費（整張原單）', '原單日期', '手續費記法']]).setFontWeight('bold');
     orig.setFrozenRows(1);
+  } else if (!orig.getRange(1, 7).getValue()) {
+    orig.getRange(1, 4).setValue('原單手續費（G＝全額：整張原單；空白：這一項分到的）');
+    orig.getRange(1, 7).setValue('手續費記法').setFontWeight('bold');
   }
   SpreadsheetApp.getUi().alert('「設定」、「紀錄」、「原單資料」分頁已建立。請在「設定」填好試算表 ID，再用選單「設定 Shopify 金鑰」。');
 }
@@ -114,7 +117,8 @@ function testShopifyConnection() {
   var scopes;
   try { scopes = shopifyAccessScopes(); } catch (e) { scopes = null; }
   var scopeText = scopes ? '目前的權限：' + (scopes.join('、') || '（沒有）') +
-    (scopes.indexOf('read_all_orders') < 0 ? '\n沒有 read_all_orders：只讀得到最近 60 天的訂單。' : '\n有 read_all_orders：讀得到 60 天以前的訂單。') : '（讀不到目前的權限）';
+    (scopes.indexOf('read_all_orders') < 0 ? '\n沒有 read_all_orders：只讀得到最近 60 天的訂單。' : '\n有 read_all_orders：讀得到 60 天以前的訂單。') +
+    (scopes.indexOf('read_merchant_managed_fulfillment_orders') < 0 ? '\n沒有 read_merchant_managed_fulfillment_orders：讀不到出貨地點分組，編號照商品順序。' : '\n有 read_merchant_managed_fulfillment_orders：編號照 Shopify 後台的出貨地點分組。') : '（讀不到目前的權限）';
   var raw = shopifyFetchOrderRaw(r.getResponseText());
   if (!raw) { ui.alert('Shopify 找不到這張單。\n\n' + scopeText); return; }
   (raw.lineItems.nodes || []).forEach(function (li) { if (li.product && li.product.descriptionHtml) li.product.descriptionHtml = li.product.descriptionHtml.slice(0, 200) + '…'; });

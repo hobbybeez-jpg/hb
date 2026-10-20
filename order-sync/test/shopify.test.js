@@ -30,6 +30,20 @@ test('Shopify 訂單轉換：目前數量、折扣分配、運費（扣折扣後
   assert.equal(o.payments[0].fee, 3.49);
 });
 
+test('出貨地點分組：每個商品記下第幾組；移過地點的用還沒關閉的那一組；沒有權限時記下原因', () => {
+  const li = (id, name) => ({ id, name, quantity: 1, currentQuantity: 1, sku: '1', originalUnitPriceSet: money(10), discountAllocations: [] });
+  const fo = (status, location, ids) => ({ status, assignedLocation: { name: location }, lineItems: { nodes: ids.map((id) => ({ lineItem: { id } })) } });
+  const base = { name: '#CA53291D', lineItems: { nodes: [li('g1', 'Trunks'), li('g2', 'Frieza'), li('g3', 'Vegeta')] }, transactions: [] };
+  const o = normalizeShopifyOrder(Object.assign({}, base, {
+    fulfillmentOrders: [fo('CLOSED', 'Old', ['g2']), fo('OPEN', 'Vancouver (Marine Drive)', ['g1', 'g3']), fo('OPEN', 'Vancouver (Renfrew)', ['g2'])]
+  }), () => '2026-10-18');
+  assert.deepEqual(o.lines.map((l) => [l.group, l.location]), [[1, 'Vancouver (Marine Drive)'], [2, 'Vancouver (Renfrew)'], [1, 'Vancouver (Marine Drive)']]);
+  assert.equal(o.groupError, '');
+  const n = normalizeShopifyOrder(Object.assign({}, base, { fulfillmentOrdersError: 'app 缺少權限' }), () => '2026-10-18');
+  assert.deepEqual(n.lines.map((l) => l.group), [0, 0, 0]);
+  assert.equal(n.groupError, 'app 缺少權限');
+});
+
 test('PayPal 手續費從 receipt 讀', () => {
   assert.deepEqual(paypalFeeFromReceipt('{"paypal_fee":"23.44","x":1}'), { fee: 23.44, key: 'paypal_fee' });
   assert.deepEqual(paypalFeeFromReceipt({ PAYMENTINFO_0_FEEAMT: '4.59' }), { fee: 4.59, key: 'PAYMENTINFO_0_FEEAMT' });

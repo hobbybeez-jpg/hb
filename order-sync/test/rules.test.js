@@ -93,7 +93,7 @@ test('美國寄送寫到 CA 分頁', () => {
   assert.equal(ops(p, 'appendShipped')[0].region, 'CA');
 });
 
-test('現貨＋預購混合：現貨先編號，手續費按已付金額比例分攤', () => {
+test('現貨＋預購混合：現貨先編號，手續費全額記在第一項現貨', () => {
   const p = planOrder(order({
     shippingCharged: 14.99,
     payments: [{ createdAt: 'x', gateway: 'shopify_payments', amount: 300, fee: 10 }],
@@ -108,8 +108,8 @@ test('現貨＋預購混合：現貨先編號，手續費按已付金額比例�
   const pre = ops(p, 'appendPreorder');
   assert.equal(pre[0].values.A, 'CA1000D-3');
   assert.equal(pre[0].values.D, 'TRIGUN FigZero 1/6 Vash the Stampede');
-  // 現貨部分 = 79.99 + 94.99 + 14.99 = 189.97；全部 = 189.97 + 219.99 = 409.96
-  assert.equal(rows[0].values.N, Math.round(10 * 189.97 / 409.96 * 100) / 100);
+  assert.deepEqual(rows.map((r) => r.values.N), [10, 0]);
+  assert.equal(ops(p, 'saveOriginal')[0].values.D, 10);
   assert.equal(pre[0].values.B, '');
 });
 
@@ -306,13 +306,16 @@ test('現貨＋預購混合，原單有保險：現貨那一列只記運費，�
   const created = planOrder(orig);
   const stockRow = ops(created, 'appendShipped')[0];
   assert.equal(stockRow.values.L, 14.99);
-  // 手續費：現貨部分 = 50 + 14.99；全部 = 64.99 + 5 + 60 + 70
-  assert.equal(stockRow.values.N, Math.round(6 * 64.99 / 199.99 * 100) / 100);
+  // 手續費全額記在第一項現貨
+  assert.equal(stockRow.values.N, 6);
   const preorders = { 'CA52654D-2': { row: 9, B: '', C: '2026-10-05', D: 'Pre B', I: 22, L: 1, M: 60, N: 60, Nvalue: 60 } };
-  const popw = planOrder(draft({ shippingCharged: 0, lines: [popwLine('CA52654D-2', 'Pre B', '22', 0)] }), ctxWith({ preorders, originals: { CA52654D: orig }, baseShipped: { CA52654D: true } }));
+  const ctx = Object.assign(ctxWith({ preorders, originals: { CA52654D: orig }, baseShipped: { CA52654D: true } }), {
+    shippedCandidates: (base) => (base === 'CA52654D' ? [{ code: 'CA52654D-1', N: 6 }] : [])
+  });
+  const popw = planOrder(draft({ shippingCharged: 0, lines: [popwLine('CA52654D-2', 'Pre B', '22', 0)] }), ctx);
   const r = ops(popw, 'appendShipped')[0];
   assert.equal(r.values.L, 2.5);
-  assert.equal(r.values.N, Math.round(6 * 62.5 / 199.99 * 100) / 100);
+  assert.equal(r.values.N, 0);
 });
 
 test('POPW：PW 商品出貨，已出貨那一列 L 欄已經有運費 → 已登記', () => {
@@ -376,9 +379,77 @@ test('預購單記錄時，存每個預購商品分到的保險、手續費、�
   }));
   const saved = ops(p, 'saveOriginal');
   assert.equal(saved.length, 2);
-  // 全部 = 運費 14.99 + 保險 5 + 20 + 60 = 99.99；P1 分到 (20 + 2.5) / 99.99
-  assert.deepEqual(saved[0].values, { A: 'CA1000D-1', B: 'CA1000D', C: 2.5, D: Math.round(4 * 22.5 / 99.99 * 100) / 100, E: 14.99, F: '2026-10-14' });
-  assert.deepEqual([saved[1].values.C, saved[1].values.D, saved[1].values.E], [2.5, Math.round(4 * 62.5 / 99.99 * 100) / 100, 14.99]);
+  // D＝整張原單的手續費（記在第一個出貨的商品），G＝全額
+  assert.deepEqual(saved[0].values, { A: 'CA1000D-1', B: 'CA1000D', C: 2.5, D: 4, E: 14.99, F: '2026-10-14', G: '全額' });
+  assert.deepEqual([saved[1].values.C, saved[1].values.D, saved[1].values.E], [2.5, 4, 14.99]);
+});
+
+test('原單手續費全額記在第一個出貨的商品：同一張出貨單第二項、之後的出貨單記 0；舊規則存的照比例', () => {
+  const preorders = {
+    'CA7D-1': { row: 1, B: '', C: '2026-10-01', D: 'P1', I: 11, L: 1, M: 50, N: 50, Nvalue: 50 },
+    'CA7D-2': { row: 2, B: '', C: '2026-10-01', D: 'P2', I: 22, L: 1, M: 60, N: 60, Nvalue: 60 },
+    'CA7D-3': { row: 3, B: '', C: '2026-10-01', D: 'P3', I: 33, L: 1, M: 70, N: 70, Nvalue: 70 }
+  };
+  const savedFull = { extras: 0, fee: 5, prepaid: 0, full: true };
+  const withShipped = (cands) => Object.assign(ctxWith({ preorders }), { findSaved: () => savedFull, shippedCandidates: () => cands });
+  // 第一次出貨（-2、-1 一起）：-1 記全額，-2 記 0
+  let p = planOrder(draft({ lines: [popwLine('CA7D-2', 'P2', '22', 0), popwLine('CA7D-1', 'P1', '11', 0)] }), withShipped([]));
+  assert.deepEqual(ops(p, 'appendShipped').map((r) => [r.values.A, r.values.N]), [['CA7D-1', 5], ['CA7D-2', 0]]);
+  // 之後出貨 -3：其他列已經記了 $5 → 0
+  p = planOrder(draft({ lines: [popwLine('CA7D-3', 'P3', '33', 0)] }), withShipped([{ code: 'CA7D-1', N: 5 }, { code: 'CA7D-2', N: 0 }]));
+  assert.equal(ops(p, 'appendShipped')[0].values.N, 0);
+  // 以前按比例記了一部分 → 記剩下的
+  p = planOrder(draft({ lines: [popwLine('CA7D-3', 'P3', '33', 0)] }), withShipped([{ code: 'CA7D-1', N: 1.2 }]));
+  assert.equal(ops(p, 'appendShipped')[0].values.N, 3.8);
+  // 其他列 N 空白 → 提醒
+  p = planOrder(draft({ lines: [popwLine('CA7D-3', 'P3', '33', 0)] }), withShipped([{ code: 'CA7D-1', N: '' }]));
+  assert.match(p.warnings.join(), /CA7D-1 N 欄是空的/);
+  // 舊規則存的（G 欄空白）：D 是這一項分到的，直接用
+  const old = Object.assign(ctxWith({ preorders }), { findSaved: () => ({ extras: 0, fee: 1.7, prepaid: 0 }), shippedCandidates: () => [{ code: 'CA7D-1', N: 2 }] });
+  p = planOrder(draft({ lines: [popwLine('CA7D-3', 'P3', '33', 0)] }), old);
+  assert.equal(ops(p, 'appendShipped')[0].values.N, 1.7);
+});
+
+test('INT 現貨＋預購：原單手續費只算第一筆付款（補運費那筆記在現貨的 O）', () => {
+  const p = planOrder(order({
+    country: 'JP', financialStatus: 'paid', shippingCharged: 60,
+    payments: [{ createdAt: '1', gateway: 'shopify_payments', amount: 100, fee: 3 }, { createdAt: '2', gateway: 'shopify_payments', amount: 60, fee: 2 }],
+    lines: [line('Stock A', 50), line('Pre B - Pay in full', 50, { sku: '22', requiresShipping: false })]
+  }));
+  const r = ops(p, 'appendShipped')[0];
+  assert.deepEqual([r.values.N, r.values.O], [3, 2]);
+  assert.equal(ops(p, 'saveOriginal')[0].values.D, 3);
+});
+
+test('保險分到的折扣移回商品（按商品金額比例），保險維持原價', () => {
+  const ins = line('Damage & Loss Insurance - $5.00 (Coverage up to $400 for every $5. Package theft is not covered)', 5, { sku: '', requiresShipping: false, discount: 0.5 });
+  const p = planOrder(order({
+    shippingCharged: 0,
+    lines: [ins, line('A - Pay in full', 60, { sku: '11', requiresShipping: false, discount: 6 }), line('B - Pay a 20% non-refundable deposit', 40, { sku: '22', requiresShipping: false, discount: 3.5 })]
+  }));
+  const pre = ops(p, 'appendPreorder');
+  // 0.5 按 60:40 分：A +0.3、B +0.2
+  assert.deepEqual(pre.map((r) => r.values.N), [53.7, 36.3]);
+  assert.equal(pre[1].values.M, Math.round((40 * 5 - 0.01 - 3.7) * 100) / 100);
+  assert.deepEqual(ops(p, 'saveOriginal').map((r) => r.values.C), [2.5, 2.5]);
+  assert.match(p.notes.join(), /折扣 \$0\.5 移回商品/);
+});
+
+test('兩個出貨地點：照 Shopify 後台的分組編號（CA53291D）', () => {
+  const p = planOrder(order({
+    name: 'CA53291D', shippingCharged: 0,
+    lines: [
+      line('Trunks - Pay a 20% non-refundable deposit', 24, { sku: '4573102736659', requiresShipping: false, group: 0, location: 'Vancouver (Marine Drive)' }),
+      line('FULL POWER FRIEZA - Pay a 20% non-refundable deposit', 30, { sku: '4580886840151', requiresShipping: false, group: 1, location: 'Vancouver (Renfrew)' }),
+      line('Vegeta - Pay a 20% non-refundable deposit', 12, { sku: '4580886840380', requiresShipping: false, group: 0, location: 'Vancouver (Marine Drive)' })
+    ]
+  }));
+  assert.deepEqual(ops(p, 'appendPreorder').map((r) => [r.values.A, r.values.I]),
+    [['CA53291D-1', 4573102736659], ['CA53291D-2', 4580886840380], ['CA53291D-3', 4580886840151]]);
+  assert.match(p.notes.join(), /Vancouver \(Marine Drive\)（-1、-2），Vancouver \(Renfrew\)（-3）/);
+  // 讀不到分組 → 照商品順序並提醒
+  const q = planOrder(order({ groupError: 'app 缺少權限', shippingCharged: 0, lines: [line('A', 10), line('B', 20)] }));
+  assert.match(q.warnings.join(), /讀不到出貨地點分組/);
 });
 
 test('POPW：控制台有原單資料時直接用（原單超過 60 天也可以），不用再讀原單', () => {

@@ -3,14 +3,15 @@
 // Script Properties（擴充功能 → Apps Script → 專案設定 → 指令碼屬性；或用選單「設定 Shopify 金鑰」）：
 //   SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET   Dev Dashboard app（client credentials，token 每 24 小時自動換）
 //   或 SHOPIFY_ADMIN_TOKEN                        2026 年以前在後台建立的舊式 custom app 的 token（shpat_…）
-// App 權限：read_orders、read_products（讀 Pre-Order Deadline）。沒有 read_all_orders 時只讀得到最近 60 天的訂單
+// App 權限：read_orders、read_products（讀 Pre-Order Deadline）、read_all_orders（60 天以前的訂單）、
+//           read_merchant_managed_fulfillment_orders（出貨地點分組，編號照 Shopify 後台的分組順序）
 
 var SHOPIFY_ORDER_FIELDS = [
   'id name createdAt cancelledAt test sourceName email displayFinancialStatus',
   'shippingAddress { countryCodeV2 }',
   'shippingLines(first: 10) { nodes { title discountedPriceSet { shopMoney { amount } } } }',
   'lineItems(first: 250) { nodes {',
-  '  name quantity currentQuantity sku requiresShipping',
+  '  id name quantity currentQuantity sku requiresShipping',
   '  originalUnitPriceSet { shopMoney { amount } }',
   '  discountAllocations { allocatedAmountSet { shopMoney { amount } } }',
   '  variant { barcode }',
@@ -20,6 +21,10 @@ var SHOPIFY_ORDER_FIELDS = [
 ].join('\n');
 
 var SHOPIFY_ORDER_QUERY = 'query OrderByName($q: String!) { orders(first: 5, query: $q) { nodes { ' + SHOPIFY_ORDER_FIELDS + ' } } }';
+
+// 出貨地點分組：Shopify 後台訂單頁按出貨地點（fulfillment order）分組顯示商品
+var SHOPIFY_FO_QUERY = 'query OrderLocations($id: ID!) { order(id: $id) { fulfillmentOrders(first: 5) { nodes { status assignedLocation { name } lineItems(first: 50) { nodes { lineItem { id } } } } } } }';
+var SHOPIFY_FO_DENIED_ = '';
 
 var SHOPIFY_RECENT_QUERY = 'query Recent($n: Int!) { orders(first: $n, sortKey: CREATED_AT, reverse: true) { nodes { name createdAt sourceName displayFinancialStatus cancelledAt shippingLines(first: 1) { nodes { title } } } } }';
 
@@ -102,7 +107,26 @@ function shopifyFetchOrderRaw(name) {
   if (!/^[A-Z0-9-]+$/.test(clean)) throw new Error('單號格式不對：' + name);
   var data = shopifyGraphql(SHOPIFY_ORDER_QUERY, { q: 'name:"#' + clean + '"' });
   var nodes = (data.orders && data.orders.nodes) || [];
-  return nodes.filter(function (n) { return shopifyCleanName(n.name) === clean; })[0] || null;
+  var node = nodes.filter(function (n) { return shopifyCleanName(n.name) === clean; })[0] || null;
+  if (node) shopifyAttachFulfillmentOrders_(node);
+  return node;
+}
+
+// 只有一個商品不用讀；沒有權限時這次執行不再重試，編號照商品順序並提醒
+function shopifyAttachFulfillmentOrders_(node) {
+  if (((node.lineItems && node.lineItems.nodes) || []).length < 2) return;
+  if (SHOPIFY_FO_DENIED_) { node.fulfillmentOrdersError = SHOPIFY_FO_DENIED_; return; }
+  try {
+    var data = shopifyGraphql(SHOPIFY_FO_QUERY, { id: node.id });
+    node.fulfillmentOrders = (data.order && data.order.fulfillmentOrders && data.order.fulfillmentOrders.nodes) || [];
+  } catch (e) {
+    if (/access denied|required access|scope/i.test(e.message)) {
+      SHOPIFY_FO_DENIED_ = 'app 缺少 read_merchant_managed_fulfillment_orders 權限';
+      node.fulfillmentOrdersError = SHOPIFY_FO_DENIED_;
+    } else {
+      node.fulfillmentOrdersError = e.message;
+    }
+  }
 }
 
 function shopifyFetchOrder(name) {
@@ -201,7 +225,20 @@ function shopifyTransactionFee(tx) {
 
 // formatDate(iso) → 'yyyy-MM-dd'（溫哥華時間）
 function normalizeShopifyOrder(node, formatDate) {
+  // 每個商品在第幾組出貨地點（同一個商品在好幾組時，例如移過出貨地點，用還沒關閉的那一組）
+  var groupOf = {};
+  (node.fulfillmentOrders || []).forEach(function (fo, gi) {
+    var closed = /^(CLOSED|CANCELLED)$/.test(fo.status || '');
+    ((fo.lineItems && fo.lineItems.nodes) || []).forEach(function (n) {
+      var id = n.lineItem && n.lineItem.id;
+      if (!id) return;
+      var prev = groupOf[id];
+      if (!prev || (prev.closed && !closed)) groupOf[id] = { group: gi, closed: closed, location: (fo.assignedLocation && fo.assignedLocation.name) || '' };
+    });
+  });
+  var hasGroups = Object.keys(groupOf).length > 0;
   var lines = ((node.lineItems && node.lineItems.nodes) || []).map(function (li) {
+    var g = groupOf[li.id];
     var qty = li.currentQuantity != null ? Number(li.currentQuantity) : Number(li.quantity);
     var discount = (li.discountAllocations || []).reduce(function (s, d) { return s + shopifyMoney(d.allocatedAmountSet); }, 0);
     if (Number(li.quantity) > 0 && qty < Number(li.quantity)) discount = discount * qty / Number(li.quantity);
@@ -213,7 +250,9 @@ function normalizeShopifyOrder(node, formatDate) {
       sku: li.sku || '',
       barcode: (li.variant && li.variant.barcode) || '',
       requiresShipping: li.requiresShipping !== false,
-      description: (li.product && li.product.descriptionHtml) || ''
+      description: (li.product && li.product.descriptionHtml) || '',
+      group: g ? g.group : (hasGroups ? 99 : 0),
+      location: g ? g.location : ''
     };
   });
   var shippingNodes = (node.shippingLines && node.shippingLines.nodes) || [];
@@ -236,7 +275,8 @@ function normalizeShopifyOrder(node, formatDate) {
     shippingTitle: shippingNodes.map(function (s) { return s.title; }).join(' / '),
     shippingCharged: Math.round(shippingNodes.reduce(function (s, n) { return s + shopifyMoney(n.discountedPriceSet); }, 0) * 100) / 100,
     lines: lines,
-    payments: payments
+    payments: payments,
+    groupError: node.fulfillmentOrdersError || ''
   };
 }
 
