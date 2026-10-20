@@ -17,7 +17,8 @@ var SETTINGS_DEFAULTS = [
   ['ALERT_EMAIL', '', '預購應付和已付對不起來時寄信到這裡'],
   ['TIMEZONE', 'America/Vancouver', '訂單日期用哪個時區'],
   ['M_DEFAULT_COLOR', '#ffff00', '已出貨 M 欄沒有特別顏色時的底色（目前試算表是黃色）'],
-  ['NUMBERING', 'stockFirst', 'stockFirst＝現貨先編號、預購後編號；shopify＝照 Shopify 訂單的商品順序']
+  ['NUMBERING', 'stockFirst', 'stockFirst＝現貨先編號、預購後編號；shopify＝照 Shopify 訂單的商品順序'],
+  ['AUTO_HOURS', '9,21', '自動執行的時間（TIMEZONE 的幾點，用逗號分開）。改了之後要再按一次選單「開啟自動執行」']
 ];
 
 function onOpen() {
@@ -27,6 +28,11 @@ function onOpen() {
     .addItem('設定 Shopify 金鑰', 'promptShopifySecrets')
     .addItem('測試 Shopify 連線（看一張訂單的原始資料）', 'testShopifyConnection')
     .addItem('建立／補齊「設定」「紀錄」「原單資料」分頁', 'setupTabs')
+    .addSeparator()
+    .addItem('開啟自動執行（每天 AUTO_HOURS 的時間）', 'autoEnable')
+    .addItem('關閉自動執行', 'autoDisable')
+    .addItem('立刻自動執行一次', 'autoRunNow')
+    .addItem('自動執行狀態', 'autoStatus')
     .addToUi();
 }
 
@@ -228,6 +234,15 @@ function apiScanList(fromDate, toDate) {
   return shopifyListOrders(fromDate, toDate);
 }
 
+// 不用讀 Shopify 就能判斷的：取消、測試、舊單、「紀錄」分頁已寫入過。回傳 null＝要讀訂單判斷
+function listPrecheck_(o) {
+  if (o.cancelled || o.test) return { status: 'skip', note: o.cancelled ? '已取消' : '測試訂單' };
+  // 下單日在範圍之前，這段期間只是出貨、修改之類的更新：之前已經處理過（預購出貨後預購表那一列可能已經刪掉，不能再登記）
+  if (o.old && !o.newPayment) return { status: 'skip', note: '舊單：下單日在掃描範圍之前，這段期間沒有新的付款，不處理' };
+  if (logEntriesFor_(o.name).length) return { status: 'done', note: '「紀錄」分頁顯示已寫入過' };
+  return null;
+}
+
 // 掃描第二步：從 start 開始逐張判斷，時間到就回傳 next，畫面會用 next 再呼叫一次
 function apiScanChunk(orders, start) {
   var began = Date.now();
@@ -238,16 +253,10 @@ function apiScanChunk(orders, start) {
     if (items.length && Date.now() - began > SCAN_CHUNK_MS) break;
     var o = orders[i];
     var item = { name: o.name, createdAt: o.createdAt, source: o.source };
-    if (o.cancelled || o.test) {
-      item.status = 'skip';
-      item.note = o.cancelled ? '已取消' : '測試訂單';
-    } else if (o.old && !o.newPayment) {
-      // 下單日在範圍之前，這段期間只是出貨、修改之類的更新：之前已經處理過（預購出貨後預購表那一列可能已經刪掉，不能再登記）
-      item.status = 'skip';
-      item.note = '舊單：下單日在掃描範圍之前，這段期間沒有新的付款，不處理';
-    } else if (logEntriesFor_(o.name).length) {
-      item.status = 'done';
-      item.note = '「紀錄」分頁顯示已寫入過';
+    var pre = listPrecheck_(o);
+    if (pre) {
+      item.status = pre.status;
+      item.note = pre.note;
     } else {
       try {
         session = session || newSession_();
