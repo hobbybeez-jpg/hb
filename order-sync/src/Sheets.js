@@ -158,7 +158,7 @@ SheetsSession.prototype.originalsSheet = function () {
   return sheet ? { book: this.control, sheet: sheet, file: 'control', tab: ORIGINALS_TAB } : null;
 };
 
-// 控制台「原單資料」：{ 單號: { extras, fee, prepaid, full } }（full：G 欄「全額」，fee 是整張原單的手續費）
+// 控制台「原單資料」：{ 單號: { original, extras, fee, prepaid, full } }（full：G 欄「全額」，fee 是整張原單的手續費）
 SheetsSession.prototype.savedData = function () {
   if (!this._saved) {
     this._saved = {};
@@ -167,7 +167,7 @@ SheetsSession.prototype.savedData = function () {
     if (last > 1) {
       ref.sheet.getRange(2, 1, last - 1, 7).getValues().forEach(function (r) {
         var code = String(r[0]).trim().toUpperCase();
-        if (code) this._saved[code] = { extras: Number(r[2]) || 0, fee: r[3] === '' ? '' : Number(r[3]), prepaid: Number(r[4]) || 0, full: String(r[6]).trim() === RULES_FEE_FULL };
+        if (code) this._saved[code] = { original: String(r[1]).trim().toUpperCase(), extras: Number(r[2]) || 0, fee: r[3] === '' ? '' : Number(r[3]), prepaid: Number(r[4]) || 0, full: String(r[6]).trim() === RULES_FEE_FULL };
       }, this);
     }
   }
@@ -227,7 +227,7 @@ SheetsSession.prototype.context = function (order) {
             var a = String(col[i]).trim();
             if (!re.test(a)) continue;
             out.push({ code: a.toUpperCase(), file: ref.file, tab: ref.tab, row: i + 1, D: self.columnValues(ref, SHEETS_COL.D)[i],
-              L: self.columnValues(ref, SHEETS_COL.L)[i], N: self.columnValues(ref, SHEETS_COL.N)[i], O: self.columnValues(ref, SHEETS_COL.O)[i], C: self.columnValues(ref, SHEETS_COL.C)[i] });
+              L: self.columnValues(ref, SHEETS_COL.L)[i], O: self.columnValues(ref, SHEETS_COL.O)[i], C: self.columnValues(ref, SHEETS_COL.C)[i] });
           }
         });
       });
@@ -264,6 +264,12 @@ SheetsSession.prototype.context = function (order) {
     },
     findSaved: function (code) {
       return self.savedData()[String(code).toUpperCase()] || null;
+    },
+    // 同一張原單存在「原單資料」的所有商品
+    savedFor: function (base) {
+      var all = self.savedData();
+      var want = String(base).toUpperCase();
+      return Object.keys(all).filter(function (k) { return all[k].original === want; }).map(function (k) { return all[k]; });
     },
     findOriginal: function (base) {
       if (!(base in self.originals)) self.originals[base] = self.fetchOriginal(base) || null;
@@ -493,7 +499,7 @@ SheetsSession.prototype.execute = function (plan) {
       sheetsEnsureRows_(sheet, row, tpl);
       sheetsSetValues_(sheet, row, Object.assign({}, a.values, { F: sheetsToDate_(a.values.F) }));
       self.remember(ref, row, a.values);
-      self.savedData()[a.key.toUpperCase()] = { extras: a.values.C, fee: a.values.D, prepaid: a.values.E, full: a.values.G === RULES_FEE_FULL };
+      self.savedData()[a.key.toUpperCase()] = { original: String(a.values.B).toUpperCase(), extras: a.values.C, fee: a.values.D, prepaid: a.values.E, full: a.values.G === RULES_FEE_FULL };
     } else if (a.op === 'updatePreorder') {
       var found = self.findRow(ref, a.key, 1);
       if (found !== row) throw new Error(a.key + '：預購表的列號變了（原本第 ' + row + ' 列），請重新預覽。');
