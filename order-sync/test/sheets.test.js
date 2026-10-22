@@ -262,6 +262,24 @@ test('原單資料：預購單寫入時存到控制台；之後的 POPW（新的
   assert.equal(p3.actions.find((a) => a.op === 'saveOriginal').skip, true);
 });
 
+test('原單資料：兩個預購商品，先出貨的那一個加上同一張原單存的保險加總', () => {
+  const { settings } = setup();
+  const control = new FakeBook('CTRL', [new FakeSheet('原單資料', 41, [{ A: '單號', B: '原單' }])]);
+  const ins = L('Damage & Loss Insurance - $5.00 (Coverage up to $400 for every $5. Package theft is not covered)', 5, { sku: '', requiresShipping: false });
+  const order = baseOrder({ name: 'CA70001D', shippingCharged: 0, payments: [{ createdAt: 'x', gateway: 'shopify_payments', amount: 115, fee: 3 }],
+    lines: [ins, L('A - Pay in full', 50, { sku: '4570000000016', requiresShipping: false }), L('B - Pay in full', 60, { sku: '4570000000023', requiresShipping: false })] });
+  const s1 = new SheetsSession(settings, () => null, control);
+  const p1 = Rules.planOrder(order, s1.context(order), {});
+  s1.resolve(p1);
+  s1.execute(p1);
+  const draftOrder = baseOrder({ name: 'CA79998D', source: 'shopify_draft_order', shippingCharged: 14.99, lines: [L('CA70001D-2\tB\t(4570000000023)\t2026-12-20', 0, { sku: '' })] });
+  const s2 = new SheetsSession(settings, () => null, control);
+  const p2 = Rules.planOrder(draftOrder, s2.context(draftOrder), {});
+  s2.resolve(p2);
+  const row = p2.actions.find((a) => a.op === 'appendShipped');
+  assert.deepEqual([row.values.A, row.values.L, row.values.N], ['CA70001D-2', 19.99, 3]);
+});
+
 test('寫入時不會「寫完再讀」：一批好幾張單（現貨、預購、PW、POPW），開始寫之後一次都沒有再讀試算表', () => {
   const { settings, ca, pre, popwTab } = setup();
   const control = new FakeBook('CTRL', [new FakeSheet('原單資料', 41, [{ A: '單號' }])]);
