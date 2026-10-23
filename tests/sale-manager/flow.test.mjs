@@ -15,7 +15,14 @@ async function setup() {
   await pg.exec(`insert into sale.settings (key, value) values
     ('pw_manager', extensions.crypt('manager-pw', extensions.gen_salt('bf', 4)))`);
   const db = {
-    transaction: (fn) => pg.transaction((tx) => fn({ query: async (text, params) => (await tx.query(text, params || [])).rows }))
+    transaction: (fn) => pg.transaction((tx) => fn({
+      query: async (text, params) => {
+        // postgres.js (the Edge Function) sends a string parameter cast straight to jsonb as a JSON string; PGlite does not,
+        // so catch it here: JSON parameters must be cast with $n::text::jsonb
+        if (/\$\d+::jsonb?\b/.test(text)) throw new Error('Use $n::text::jsonb for JSON parameters: ' + text.slice(0, 80));
+        return (await tx.query(text, params || [])).rows;
+      }
+    }))
   };
   return { pg, db };
 }
