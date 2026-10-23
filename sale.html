@@ -1,0 +1,1128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Sale Manager</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  /* Same Shopify-admin-like palette as the Receiving Tracker */
+  :root {
+    --bg: #f1f2f4; --card: #fff; --ink: #1a1a1a; --ink-2: #303030; --muted: #616161; --subtle: #8a8a8a;
+    --line: #e3e3e3; --line-2: #ebebeb; --hover: #f7f7f7; --field: #d4d4d4;
+    --brand: #005bd3; --focus: #005bd3;
+    --ok: #29845a; --ok-ink: #0c5132; --ok-bg: #cdfee1;
+    --warn: #5e4200; --warn-bg: #ffeb78; --warn-soft: #fff6d1;
+    --bad: #c70a24; --bad-ink: #8e0b21; --bad-bg: #fee8eb;
+    --info-bg: #eaf4ff; --info-ink: #00527c;
+    --sale: #b42318; --sale-bg: #fef0ef;
+    --shadow: 0 1px 0 rgba(26,26,26,.07), 0 0 0 1px rgba(26,26,26,.07);
+    --shadow-hover: 0 2px 6px rgba(26,26,26,.08), 0 0 0 1px rgba(26,26,26,.1);
+    --radius: 12px; --radius-sm: 8px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased;
+    font: 14px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  a { color: var(--brand); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .hidden { display: none !important; }
+  .muted { color: var(--muted); }
+  .small { font-size: 13px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; color: var(--ink-2); }
+  .nowrap { white-space: nowrap; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .grow { flex: 1 1 auto; }
+  .strike { text-decoration: line-through; color: var(--subtle); }
+
+  header { position: sticky; top: 0; z-index: 20; background: rgba(255,255,255,.92); backdrop-filter: saturate(180%) blur(8px);
+    border-bottom: 1px solid var(--line); }
+  .bar { max-width: 1200px; margin: 0 auto; display: flex; align-items: center; gap: 10px; padding: 12px 20px 6px; }
+  .bar h1 { font-size: 15px; font-weight: 650; margin: 0; white-space: nowrap; letter-spacing: -.01em; display: flex; align-items: center; gap: 10px; }
+  .logo { width: 28px; height: 28px; border-radius: 8px; background: #1a1a1a; display: inline-flex; align-items: center; justify-content: center; font-size: 15px; }
+  .bar h1 .sub { color: var(--subtle); font-weight: 500; }
+  .user-chip { margin-left: auto; background: #fff; border: 0; box-shadow: var(--shadow); color: var(--ink-2); padding: 5px 12px 5px 6px;
+    border-radius: 999px; font-size: 13px; font-weight: 500; white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; }
+  .user-chip::before { content: attr(data-initial); width: 22px; height: 22px; border-radius: 50%; background: #e3e3e3; color: var(--ink-2);
+    display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; }
+  .user-chip:hover { background: var(--hover); }
+  nav.tabs { max-width: 1200px; margin: 0 auto; display: flex; gap: 2px; padding: 0 12px; overflow-x: auto; scrollbar-width: none; }
+  nav.tabs button { background: transparent; border: 0; color: var(--muted); padding: 10px 10px 11px; border-bottom: 2px solid transparent;
+    white-space: nowrap; font-weight: 500; }
+  nav.tabs button:hover { color: var(--ink); }
+  nav.tabs button.active { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+  nav.tabs .badge { background: var(--sale); color: #fff; border-radius: 999px; padding: 0 7px; font-size: 11px; margin-left: 6px; font-weight: 700; }
+
+  main { max-width: 1200px; margin: 0 auto; padding: 20px 20px 96px; }
+  .card { background: var(--card); box-shadow: var(--shadow); border-radius: var(--radius); padding: 16px; }
+  .section-title { font-size: 14px; font-weight: 650; margin: 24px 0 10px; display: flex; align-items: center; gap: 8px; }
+  .criteria { margin: 6px 0 0; padding-left: 20px; color: var(--ink-2); }
+  .criteria li { margin: 2px 0; }
+  .stats { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 10px; }
+  .stat b { display: block; font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .stat span { font-size: 12px; color: var(--muted); }
+
+  .btn { border: 0; background: #fff; color: var(--ink-2); padding: 7px 14px; border-radius: var(--radius-sm); min-height: 36px; font-weight: 550;
+    box-shadow: inset 0 -1px 0 #d4d4d4, 0 0 0 1px #e3e3e3, 0 1px 0 rgba(0,0,0,.05); transition: background .12s, box-shadow .12s; white-space: nowrap; }
+  .btn:hover { background: var(--hover); }
+  .btn.primary { background: linear-gradient(#3a3a3a, #262626); color: #fff; box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 0 0 1px #1a1a1a, 0 1px 2px rgba(0,0,0,.2); }
+  .btn.primary:hover { background: linear-gradient(#303030, #1a1a1a); }
+  .btn.sale { background: linear-gradient(#d33a2c, #b42318); color: #fff; box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 0 0 1px #9b1c13, 0 1px 2px rgba(0,0,0,.15); }
+  .btn.sale:hover { background: linear-gradient(#c43426, #a11f15); }
+  .btn.danger { color: var(--bad); }
+  .btn.small { padding: 4px 10px; min-height: 30px; font-size: 13px; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn:focus-visible, .chip:focus-visible, nav.tabs button:focus-visible, .link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .link { background: none; border: 0; color: var(--brand); padding: 0; font-size: 13px; font-weight: 500; }
+  .link:hover { text-decoration: underline; }
+  input.inp, select.inp, textarea.inp { border: 1px solid var(--field); border-radius: var(--radius-sm); padding: 7px 11px; background: #fff; min-height: 36px; width: 100%; }
+  input.inp:focus, select.inp:focus, textarea.inp:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px rgba(0,91,211,.25); }
+  input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--ink); cursor: pointer; }
+
+  .chips { display: inline-flex; gap: 2px; padding: 3px; background: #e3e3e3; border-radius: 10px; }
+  .chip { border: 0; background: transparent; border-radius: 8px; padding: 5px 12px; font-size: 13px; font-weight: 550; color: var(--muted); white-space: nowrap; }
+  .chip:hover { color: var(--ink); }
+  .chip.active { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+  .tag { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 550; line-height: 20px; padding: 0 8px; border-radius: 8px;
+    background: #ebebeb; color: var(--muted); white-space: nowrap; }
+  .tag.ok { background: var(--ok-bg); color: var(--ok-ink); }
+  .tag.warn { background: var(--warn-bg); color: var(--warn); }
+  .tag.bad { background: var(--bad-bg); color: var(--bad-ink); }
+  .tag.info { background: var(--info-bg); color: var(--info-ink); }
+  .tag.sale { background: var(--sale-bg); color: var(--sale); }
+
+  table.grid { width: 100%; border-collapse: collapse; background: #fff; }
+  table.grid th, table.grid td { border-bottom: 1px solid var(--line-2); padding: 9px 12px; text-align: left; vertical-align: top; }
+  table.grid tbody tr:last-child td { border-bottom: 0; }
+  table.grid th { font-size: 12px; color: var(--muted); font-weight: 600; background: #f7f7f7; position: sticky; top: 0; z-index: 1; white-space: nowrap; }
+  table.grid th.num, table.grid td.num { text-align: right; }
+  table.grid tr.sel td { background: #f3f8ff; }
+  table.grid tr.off td { color: var(--subtle); }
+  table.grid tr.click { cursor: pointer; }
+  table.grid tr.click:hover td { background: var(--hover); }
+  table.grid td.ck, table.grid th.ck { width: 36px; padding-right: 0; }
+  .table-wrap { overflow-x: auto; box-shadow: var(--shadow); border-radius: var(--radius); background: #fff; }
+  .pname { font-weight: 600; overflow-wrap: anywhere; }
+  .psub { font-size: 12px; color: var(--muted); }
+  .vlist { font-size: 12.5px; color: var(--ink-2); }
+  .vlist div { white-space: nowrap; }
+
+  /* Selection bar (bottom) */
+  .selbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; background: #1a1a1a; color: #fff; }
+  .selbar .in { max-width: 1200px; margin: 0 auto; padding: 12px 20px calc(12px + env(safe-area-inset-bottom)); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .selbar .btn:not(.sale) { background: transparent; color: #fff; box-shadow: 0 0 0 1px #555; }
+
+  .modal-bg { position: fixed; inset: 0; background: rgba(26,26,26,.4); z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .modal { background: #fff; border-radius: 16px; width: min(720px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column;
+    box-shadow: 0 24px 64px rgba(0,0,0,.22), 0 0 0 1px rgba(0,0,0,.06); overflow: hidden; }
+  .modal.narrow { width: min(440px, 100%); }
+  .modal .mh { padding: 14px 16px; background: #f7f7f7; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+  .modal .mh h3 { margin: 0; font-size: 14px; font-weight: 650; flex: 1; }
+  .modal .mb { padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+  .modal .mf { padding: 12px 16px; border-top: 1px solid var(--line); display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+  .x { background: none; border: 0; font-size: 20px; line-height: 1; color: var(--muted); padding: 4px 8px; border-radius: 6px; }
+  .x:hover { background: #ebebeb; color: var(--ink); }
+  label.f { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink-2); font-weight: 500; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .err { color: var(--bad); font-size: 13px; }
+  .note-box { background: var(--warn-soft); color: var(--warn); border: 1px solid #f5dd7a; border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+  .info-box { background: var(--info-bg); color: var(--info-ink); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+  .bad-box { background: var(--bad-bg); color: var(--bad-ink); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+  .meter { height: 8px; background: #ebebeb; border-radius: 999px; overflow: hidden; }
+  .meter > div { height: 100%; background: var(--ok); transition: width .3s; }
+
+  #toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 80; display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; }
+  #toast div { background: #1a1a1a; color: #fff; padding: 10px 16px; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.25); max-width: 90vw; font-weight: 500; font-size: 13.5px; }
+  #toast div.bad { background: var(--bad); }
+  #toast div.ok::before { content: "✓"; margin-right: 8px; color: #7ee2b0; font-weight: 700; }
+  .empty { text-align: center; color: var(--muted); padding: 36px 10px; }
+  .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid #d4d4d4; border-top-color: var(--ink); border-radius: 50%; animation: sp .8s linear infinite; vertical-align: -2px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  .detail-head { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+  .detail-head h2 { margin: 2px 0 0; font-size: 20px; font-weight: 650; letter-spacing: -.01em; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+  @media (max-width: 760px) {
+    main { padding: 12px 12px 110px; }
+    .bar { padding: 10px 12px 4px; }
+    .bar h1 .sub { display: none; }
+    .btn { min-height: 40px; }
+    input.inp, select.inp { font-size: 16px; }
+    .two { grid-template-columns: 1fr; }
+    .hide-sm { display: none !important; }
+    .modal-bg { align-items: flex-end; padding: 0; }
+    .modal { border-radius: 16px 16px 0 0; max-height: 92vh; }
+    .actions { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1><span class="logo" aria-hidden="true">🏷️</span>Sale Manager <span class="sub">· Hobby Bee</span></h1>
+    <button class="user-chip" id="userChip" type="button" data-initial="?">—</button>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button data-tab="scan" class="active">Find Products</button>
+    <button data-tab="sales">Sales<span class="badge hidden" id="salesBadge"></span></button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+</header>
+
+<main>
+  <!-- Scan -->
+  <section id="tab-scan">
+    <div class="card">
+      <div class="row">
+        <div class="grow">
+          <b>Products that match all of these</b>
+          <ol class="criteria small" id="criteria">
+            <li>No sales in the last 2 years</li>
+            <li>Not tagged <span class="mono">sale</span>, <span class="mono">20off</span> or <span class="mono">40off</span></li>
+            <li>Stock more than 0</li>
+          </ol>
+        </div>
+        <button class="btn primary" id="btnScan" type="button">Run new scan</button>
+      </div>
+      <div id="scanStatus" class="small" style="margin-top:10px"></div>
+    </div>
+
+    <div id="scanList" class="hidden">
+      <div class="row" style="margin:16px 0 10px">
+        <div class="chips" id="scanChips">
+          <button class="chip active" data-filter="ok">Can go on sale</button>
+          <button class="chip" data-filter="all">All</button>
+          <button class="chip" data-filter="cheap">Price too low</button>
+          <button class="chip" data-filter="busy">In a sale</button>
+        </div>
+        <input class="inp grow" id="scanFilter" placeholder="Filter by name / vendor / SKU / barcode" style="max-width:300px" />
+        <select class="inp" id="scanSort" style="width:auto">
+          <option value="created">Oldest first</option>
+          <option value="stock">Most stock</option>
+          <option value="price">Highest price</option>
+          <option value="off">Biggest discount</option>
+          <option value="title">Name</option>
+        </select>
+        <button class="btn" id="btnExportScan" type="button">⬇ Export Excel</button>
+      </div>
+      <div class="row small muted" style="margin-bottom:8px">
+        <span id="scanCount"></span>
+        <button class="link" id="btnSelectShown" type="button">Select all shown</button>
+        <button class="link" id="btnClearSel" type="button">Clear selection</button>
+      </div>
+      <div class="table-wrap">
+        <table class="grid">
+          <thead><tr>
+            <th class="ck"><input type="checkbox" id="ckAll" aria-label="Select all shown" /></th>
+            <th>Product</th><th class="num">Stock</th><th class="num">Price</th><th class="num">Sale price</th>
+            <th class="num">Off</th><th class="hide-sm">Created</th><th>Note</th>
+          </tr></thead>
+          <tbody id="scanRows"></tbody>
+        </table>
+      </div>
+      <div id="scanMore" style="text-align:center;margin-top:12px"></div>
+    </div>
+  </section>
+
+  <!-- Sales -->
+  <section id="tab-sales" class="hidden">
+    <div id="salesList"></div>
+    <div id="saleDetail" class="hidden"></div>
+  </section>
+
+  <!-- Settings -->
+  <section id="tab-settings" class="hidden">
+    <div class="card" style="max-width:600px">
+      <div class="section-title" style="margin-top:0">How it works</div>
+      <div class="small" id="howItWorks"></div>
+    </div>
+    <div class="card" style="max-width:600px;margin-top:12px">
+      <div class="section-title" style="margin-top:0">Shopify</div>
+      <div id="shopifyStatus" class="small muted">—</div>
+      <div style="margin-top:8px"><button class="btn small" type="button" id="shopifyTest">Test connection</button>
+        <span id="shopifyTestResult" class="small"></span></div>
+      <div class="small muted" style="margin-top:4px">Signs in to Shopify and reads one product and one order. Nothing is changed.</div>
+      <div class="section-title">Schedule</div>
+      <div id="tickStatus" class="small muted">—</div>
+    </div>
+    <div class="card" style="max-width:600px;margin-top:12px">
+      <div class="section-title" style="margin-top:0">Change Password</div>
+      <div class="small muted" style="margin-bottom:10px">Requires the manager password. New passwords need at least 8 characters.
+        Leave the staff password blank to not require one (not recommended).</div>
+      <form id="pwForm" style="display:flex;flex-direction:column;gap:10px">
+        <label class="f">Password to change
+          <select class="inp" id="pwKey">
+            <option value="pw_manager">Manager (apply, cancel, end sales; change passwords)</option>
+            <option value="pw_access">Staff password (to open the app)</option>
+          </select>
+        </label>
+        <label class="f">New password<input class="inp" id="pwNew" type="password" autocomplete="new-password" /></label>
+        <label class="f">Manager password<input class="inp" id="pwAdmin" type="password" autocomplete="off" /></label>
+        <div><button class="btn primary" type="submit">Save</button></div>
+      </form>
+    </div>
+  </section>
+</main>
+
+<div class="selbar hidden" id="selBar">
+  <div class="in">
+    <b id="selText"></b>
+    <span class="small" id="selSub" style="color:#bbb"></span>
+    <span class="grow"></span>
+    <button class="btn small" id="selClear" type="button">Clear</button>
+    <button class="btn sale" id="btnApply" type="button">Apply sale…</button>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+// ---------------- Config ----------------
+const SUPABASE_URL = 'https://ibizemppcvlllhczjkgu.supabase.co';
+// The anon key is public by design; access is controlled by the staff and manager passwords in the Edge Function
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImliaXplbXBwY3ZsbGxoY3pqa2d1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAzODE3NDEsImV4cCI6MjEwNTk1Nzc0MX0.dQsH967XdQ920DVzp2XB84S8JlhueWjNOgatC5OaOCI';
+const LOCAL = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+const API_URL = LOCAL ? '/api/sale-manager' : SUPABASE_URL + '/functions/v1/sale-manager';
+const PAGE_SIZE = 200;
+
+const SALE_STATES = {
+  SCHEDULED: ['Scheduled', 'info'], STARTING: ['Starting', 'warn'], ON_SALE: ['On sale', 'sale'],
+  ENDING: ['Ending', 'warn'], ENDED: ['Ended', ''], CANCELED: ['Canceled', '']
+};
+const ITEM_STATES = {
+  PENDING: ['Waiting', 'info'], ON_SALE: ['On sale', 'sale'], ENDED: ['Restored', 'ok'], SKIPPED: ['Skipped', 'warn'], CANCELED: ['Canceled', '']
+};
+const SCAN_PHASES = {
+  PRODUCTS: 'Reading products from Shopify', READ_PRODUCTS: 'Checking products',
+  ORDERS: 'Reading orders of the last 2 years from Shopify', READ_ORDERS: 'Checking orders'
+};
+
+const state = {
+  tab: 'scan', config: null,
+  scan: null, inSale: {}, running: null, failed: null,
+  selected: new Set(), filter: 'ok', text: '', sort: 'created', shown: PAGE_SIZE,
+  campaigns: [], detail: null, detailId: 0
+};
+
+// ---------------- Helpers ----------------
+const $ = (sel, root) => (root || document).querySelector(sel);
+const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function store(key, value) { try { if (value === undefined) return localStorage.getItem(key) || ''; localStorage.setItem(key, value); } catch (e) { return ''; } return value; }
+function fmtDate(v) { if (!v) return ''; const d = new Date(v); return isNaN(d) ? '' : d.toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }); }
+function fmtTime(v) { if (!v) return ''; const d = new Date(v); return isNaN(d) ? '' : d.toLocaleString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }); }
+function fmtMoney(v) { return v == null || v === '' ? '' : '$' + Number(v).toFixed(2); }
+function cents(v) { const n = Number(v); return v == null || v === '' || !isFinite(n) ? null : Math.round(n * 100); }
+function pctOff(price, sale) { const p = cents(price); const s = cents(sale); return p && s != null ? Math.round((1 - s / p) * 100) : null; }
+function numericId(gid) { return String(gid || '').replace(/^.*\//, ''); }
+function adminUrl(gid) { const s = state.config && state.config.shopify.store; return s ? `https://${s}/admin/products/${numericId(gid)}` : ''; }
+function variantName(v) { return !v.title || v.title === 'Default Title' ? '' : v.title; }
+function toast(msg, kind) {
+  const el = document.createElement('div');
+  el.className = kind || '';
+  el.textContent = msg;
+  $('#toast').appendChild(el);
+  setTimeout(() => el.remove(), kind === 'bad' ? 5000 : 2600);
+}
+function stateTag(map, key) { const [label, kind] = map[key] || [key, '']; return `<span class="tag ${kind}">${esc(label)}</span>`; }
+function range(values, fmt) {
+  const nums = values.filter((v) => v != null).map(Number);
+  if (!nums.length) return '';
+  const lo = Math.min(...nums); const hi = Math.max(...nums);
+  return lo === hi ? fmt(lo) : `${fmt(lo)}–${fmt(hi)}`;
+}
+
+// ---------------- API ----------------
+async function api(fn, args) {
+  let res;
+  try {
+    res = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
+        apikey: SUPABASE_ANON_KEY,
+        'x-sale-code': store('sale_code'),
+        'x-sale-user': encodeURIComponent(store('sale_user'))
+      },
+      body: JSON.stringify({ fn, args: args || {} })
+    });
+  } catch (e) {
+    throw Object.assign(new Error('Cannot connect. Please check your network.'), { code: 'NETWORK' });
+  }
+  let body;
+  try { body = await res.json(); } catch (e) { body = { ok: false, error: 'Server error (' + res.status + ')' }; }
+  if (!body.ok) {
+    const err = Object.assign(new Error(body.error || 'Something went wrong'), { code: body.code || '' });
+    if (err.code === 'ACCESS' || err.code === 'NEED_USER') showLogin(err.message);
+    throw err;
+  }
+  return body.result;
+}
+
+// ---------------- Modal ----------------
+function modal({ title, body, foot, narrow, onClose, beforeClose }) {
+  const bg = document.createElement('div');
+  bg.className = 'modal-bg';
+  bg.innerHTML = `<div class="modal ${narrow ? 'narrow' : ''}" role="dialog" aria-modal="true">
+    <div class="mh"><h3>${esc(title)}</h3><button class="x" type="button" aria-label="Close">×</button></div>
+    <div class="mb"></div><div class="mf"></div></div>`;
+  const mb = $('.mb', bg); const mf = $('.mf', bg);
+  if (typeof body === 'string') mb.innerHTML = body; else if (body) mb.appendChild(body);
+  if (typeof foot === 'string') mf.innerHTML = foot; else if (foot) mf.appendChild(foot); else mf.remove();
+  const close = () => {
+    if (beforeClose && beforeClose() === false) return;
+    bg.remove(); document.removeEventListener('keydown', onKey); if (onClose) onClose();
+  };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  $('.x', bg).onclick = close;
+  bg.addEventListener('mousedown', (e) => { if (e.target === bg) close(); });
+  document.body.appendChild(bg);
+  return { el: bg, body: mb, foot: mf, close };
+}
+
+function askPassword(title, hint) {
+  return new Promise((resolve) => {
+    const m = modal({
+      title, narrow: true,
+      body: `<div class="small muted">${hint || ''}</div>
+        <form id="pwAsk"><input class="inp" type="password" autocomplete="off" placeholder="Manager password" /></form>`,
+      foot: '<button class="btn" type="button" data-a="cancel">Cancel</button><button class="btn primary" type="button" data-a="ok">Confirm</button>',
+      onClose: () => resolve(null)
+    });
+    const input = $('input', m.body);
+    const done = (v) => { const r = resolve; resolve = () => {}; m.close(); r(v); };
+    $('#pwAsk', m.body).onsubmit = (e) => { e.preventDefault(); done(input.value); };
+    $('[data-a=ok]', m.foot).onclick = () => done(input.value);
+    $('[data-a=cancel]', m.foot).onclick = () => done(null);
+    setTimeout(() => input.focus(), 30);
+  });
+}
+
+// ---------------- Sign in (name + staff password) ----------------
+let loginOpen = false;
+function showLogin(message) {
+  if (loginOpen) return;
+  loginOpen = true;
+  const m = modal({
+    title: 'Sign In', narrow: true,
+    body: `${message ? `<div class="err">${esc(message)}</div>` : ''}
+      <form id="loginForm" style="display:flex;flex-direction:column;gap:10px">
+        <label class="f">Your name (recorded on each sale)<input class="inp" name="name" autocomplete="name" value="${esc(store('sale_user'))}" /></label>
+        <label class="f">Staff password (leave blank if none)<input class="inp" name="code" type="password" autocomplete="off" value="${esc(store('sale_code'))}" /></label>
+        <button class="btn primary" type="submit">Enter</button>
+      </form>`,
+    onClose: () => { loginOpen = false; }
+  });
+  const form = $('#loginForm', m.body);
+  setTimeout(() => (store('sale_user') ? form.code : form.name).focus(), 30);
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const name = form.name.value.trim();
+    if (!name) { form.name.focus(); return; }
+    store('sale_user', name.slice(0, 40));
+    store('sale_code', form.code.value);
+    renderUser();
+    try {
+      state.config = await api('ping');
+      loginOpen = false;
+      m.close();
+      renderConfig();
+      refreshCurrent();
+    } catch (err) {
+      const box = $('.err', m.body) || m.body.insertBefore(Object.assign(document.createElement('div'), { className: 'err' }), m.body.firstChild);
+      box.textContent = err.message;
+      loginOpen = true;
+    }
+  };
+}
+function renderUser() {
+  const name = store('sale_user');
+  const chip = $('#userChip');
+  chip.textContent = name || 'Sign in';
+  chip.dataset.initial = name ? name.trim().charAt(0).toUpperCase() : '?';
+}
+$('#userChip').onclick = () => showLogin('');
+
+// ---------------- Tabs ----------------
+function setTab(tab) {
+  state.tab = tab;
+  $$('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  ['scan', 'sales', 'settings'].forEach((t) => $('#tab-' + t).classList.toggle('hidden', t !== tab));
+  renderSelBar();
+  refreshCurrent();
+}
+$$('#tabs button').forEach((b) => { b.onclick = () => { if (b.dataset.tab === 'sales') closeDetail(); setTab(b.dataset.tab); }; });
+function refreshCurrent() {
+  if (state.tab === 'scan') loadScan();
+  else if (state.tab === 'sales') state.detailId ? openDetail(state.detailId) : loadSales();
+  else renderConfig();
+}
+
+// ---------------- Scan ----------------
+let scanTimer = 0;
+async function loadScan(fn) {
+  clearTimeout(scanTimer);
+  try {
+    applyScan(await api(fn || 'getScan', { haveId: state.scan ? state.scan.id : 0 }));
+  } catch (e) {
+    $('#scanStatus').innerHTML = `<span class="err">${esc(e.message)}</span>`;
+  }
+}
+
+function applyScan(res) {
+  if (res.last && res.last.results) {
+    if (!state.scan || state.scan.id !== res.last.id) state.selected.clear();
+    state.scan = res.last;
+    state.shown = PAGE_SIZE;
+  } else if (res.last && state.scan) {
+    Object.assign(state.scan, res.last, { results: state.scan.results });
+  }
+  state.inSale = res.inSale || {};
+  state.running = res.running;
+  state.failed = res.failed;
+  renderScanStatus();
+  renderScanList();
+  if (state.running) scanTimer = setTimeout(() => { if (state.tab === 'scan') loadScan('scanStatus'); }, 4000);
+}
+
+function renderScanStatus() {
+  const box = $('#scanStatus');
+  const r = state.running;
+  const parts = [];
+  if (r) {
+    const read = r.stats && r.stats.read ? ` · ${r.stats.read.toLocaleString()} read` : '';
+    parts.push(`<div class="info-box row"><span class="spin"></span><span class="grow">${esc(SCAN_PHASES[r.status] || r.status)}${read}…
+      <span class="muted">Started by ${esc(r.startedBy)} at ${esc(fmtTime(r.startedAt))}. Large stores can take a few minutes; you can leave this page.</span></span>
+      <button class="btn small" type="button" id="btnCancelScan">Stop</button></div>`);
+  }
+  if (state.failed) parts.push(`<div class="bad-box">Scan of ${esc(fmtTime(state.failed.startedAt))} failed: ${esc(state.failed.error)}</div>`);
+  const s = state.scan;
+  if (s) {
+    const st = s.stats || {};
+    parts.push(`<div class="muted">Last scan ${esc(fmtTime(s.finishedAt))} by ${esc(s.startedBy)} · sales counted since ${esc(s.since)}</div>
+      <div class="stats">
+        <div class="stat"><b>${(st.products || 0).toLocaleString()}</b><span>Active products</span></div>
+        <div class="stat"><b>${(st.inStock || 0).toLocaleString()}</b><span>In stock</span></div>
+        <div class="stat"><b>${(st.untagged || 0).toLocaleString()}</b><span>…without sale tags</span></div>
+        <div class="stat"><b>${(st.sold || 0).toLocaleString()}</b><span>…sold in 2 years</span></div>
+        <div class="stat"><b>${(st.matches || 0).toLocaleString()}</b><span>Match</span></div>
+      </div>`);
+  } else if (!r) {
+    parts.push('<div class="muted">No scan yet. Press "Run new scan".</div>');
+  }
+  box.innerHTML = parts.join('<div style="height:8px"></div>');
+  $('#btnScan').disabled = !!r;
+  const cancel = $('#btnCancelScan');
+  if (cancel) cancel.onclick = async () => { cancel.disabled = true; await loadScan('cancelScan'); };
+}
+
+$('#btnScan').onclick = async () => {
+  if (state.scan && !confirm('Run a new scan? It reads all products and the last 2 years of orders from Shopify and replaces the list below.')) return;
+  $('#btnScan').disabled = true;
+  await loadScan('startScan');
+};
+
+function productNote(p) {
+  const busy = state.inSale[p.id];
+  if (busy) return { busy: true, html: `<span class="tag sale">In sale: ${esc(busy.name)}</span>` };
+  if (!p.canDiscount) return { cheap: true, html: '<span class="tag">Price too low</span>' };
+  const notes = [];
+  const partial = p.variants.filter((v) => !v.salePrice).length;
+  if (partial) notes.push(`<span class="tag">${partial} variant${partial > 1 ? 's' : ''} too cheap</span>`);
+  if (p.variants.some((v) => v.compareAtPrice && cents(v.compareAtPrice) > cents(v.price))) notes.push('<span class="tag warn" title="This compare-at price is replaced during the sale and put back afterwards">Has compare-at</span>');
+  const off = bestOff(p);
+  if (off != null && off < 20) notes.push(`<span class="tag warn" title="The sale price is rounded up to x9.99">Only ${off}% off</span>`);
+  return { html: notes.join(' ') };
+}
+function bestOff(p) {
+  const offs = p.variants.filter((v) => v.salePrice).map((v) => pctOff(v.price, v.salePrice));
+  return offs.length ? Math.max(...offs) : null;
+}
+
+function filteredProducts() {
+  if (!state.scan) return [];
+  const q = state.text.trim().toLowerCase();
+  let list = state.scan.results.filter((p) => {
+    const note = productNote(p);
+    if (state.filter === 'ok' && (note.busy || note.cheap)) return false;
+    if (state.filter === 'cheap' && !note.cheap) return false;
+    if (state.filter === 'busy' && !note.busy) return false;
+    if (!q) return true;
+    return [p.title, p.vendor, p.productType, ...p.variants.flatMap((v) => [v.sku, v.barcode, v.title])].some((s) => String(s || '').toLowerCase().includes(q));
+  });
+  const maxPrice = (p) => Math.max(...p.variants.map((v) => Number(v.price) || 0));
+  const sorters = {
+    created: (a, b) => String(a.createdAt).localeCompare(String(b.createdAt)),
+    stock: (a, b) => b.totalInventory - a.totalInventory,
+    price: (a, b) => maxPrice(b) - maxPrice(a),
+    off: (a, b) => (bestOff(b) ?? -1) - (bestOff(a) ?? -1),
+    title: (a, b) => a.title.localeCompare(b.title)
+  };
+  return list.slice().sort((a, b) => sorters[state.sort](a, b) || a.title.localeCompare(b.title));
+}
+
+function selectable(p) { const n = productNote(p); return !n.busy && !n.cheap; }
+
+function renderScanList() {
+  const wrap = $('#scanList');
+  wrap.classList.toggle('hidden', !state.scan);
+  if (!state.scan) { renderSelBar(); return; }
+  const list = filteredProducts();
+  // Selected products that are no longer selectable (put into a sale meanwhile) drop out
+  const byId = new Map(state.scan.results.map((p) => [p.id, p]));
+  for (const id of [...state.selected]) if (!byId.has(id) || !selectable(byId.get(id))) state.selected.delete(id);
+  $('#scanCount').textContent = `${list.length.toLocaleString()} shown of ${state.scan.results.length.toLocaleString()}`;
+  const rows = list.slice(0, state.shown).map((p) => {
+    const can = selectable(p);
+    const sel = state.selected.has(p.id);
+    const note = productNote(p);
+    const many = p.variants.length > 1;
+    const sku = p.variants.map((v) => v.sku).filter(Boolean).slice(0, 2).join(', ');
+    const priceCell = many
+      ? `<div class="vlist">${p.variants.map((v) => `<div>${esc(variantName(v))} ${esc(fmtMoney(v.price))}</div>`).join('')}</div>`
+      : `${esc(fmtMoney(p.variants[0] && p.variants[0].price))}${p.variants[0] && p.variants[0].compareAtPrice ? `<div class="psub strike">${esc(fmtMoney(p.variants[0].compareAtPrice))}</div>` : ''}`;
+    const saleCell = many
+      ? `<div class="vlist">${p.variants.map((v) => `<div>${v.salePrice ? `<b>${esc(fmtMoney(v.salePrice))}</b>` : '<span class="muted">—</span>'}</div>`).join('')}</div>`
+      : (p.variants[0] && p.variants[0].salePrice ? `<b>${esc(fmtMoney(p.variants[0].salePrice))}</b>` : '<span class="muted">—</span>');
+    const offCell = many
+      ? `<div class="vlist">${p.variants.map((v) => `<div>${v.salePrice ? pctOff(v.price, v.salePrice) + '%' : ''}&nbsp;</div>`).join('')}</div>`
+      : (p.variants[0] && p.variants[0].salePrice ? pctOff(p.variants[0].price, p.variants[0].salePrice) + '%' : '');
+    const url = adminUrl(p.id);
+    return `<tr class="${sel ? 'sel' : ''} ${can ? '' : 'off'}" data-id="${esc(p.id)}">
+      <td class="ck"><input type="checkbox" ${sel ? 'checked' : ''} ${can ? '' : 'disabled'} aria-label="Select" /></td>
+      <td><div class="pname">${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(p.title)}</a>` : esc(p.title)}</div>
+        <div class="psub">${esc([p.vendor, p.productType, sku].filter(Boolean).join(' · '))}</div></td>
+      <td class="num">${p.totalInventory}</td>
+      <td class="num nowrap">${priceCell}</td>
+      <td class="num nowrap">${saleCell}</td>
+      <td class="num nowrap">${offCell}</td>
+      <td class="hide-sm nowrap">${esc(fmtDate(p.createdAt))}</td>
+      <td>${note.html}</td>
+    </tr>`;
+  });
+  $('#scanRows').innerHTML = rows.join('') || '<tr><td colspan="8" class="empty">No products.</td></tr>';
+  const more = list.length - state.shown;
+  $('#scanMore').innerHTML = more > 0 ? `<button class="btn" type="button" id="btnMore">Show ${Math.min(more, PAGE_SIZE)} more (${more.toLocaleString()} left)</button>` : '';
+  if (more > 0) $('#btnMore').onclick = () => { state.shown += PAGE_SIZE; renderScanList(); };
+  const shownSelectable = list.slice(0, state.shown).filter(selectable);
+  $('#ckAll').checked = shownSelectable.length > 0 && shownSelectable.every((p) => state.selected.has(p.id));
+  renderSelBar();
+}
+
+$('#scanRows').addEventListener('click', (e) => {
+  const tr = e.target.closest('tr[data-id]');
+  if (!tr || e.target.closest('a')) return;
+  const p = state.scan.results.find((x) => x.id === tr.dataset.id);
+  if (!p || !selectable(p)) return;
+  if (state.selected.has(p.id)) state.selected.delete(p.id); else state.selected.add(p.id);
+  renderScanList();
+});
+$('#ckAll').onchange = (e) => {
+  const shown = filteredProducts().slice(0, state.shown).filter(selectable);
+  for (const p of shown) { if (e.target.checked) state.selected.add(p.id); else state.selected.delete(p.id); }
+  renderScanList();
+};
+$('#btnSelectShown').onclick = () => { for (const p of filteredProducts().filter(selectable)) state.selected.add(p.id); renderScanList(); };
+$('#btnClearSel').onclick = $('#selClear').onclick = () => { state.selected.clear(); renderScanList(); };
+$$('#scanChips .chip').forEach((c) => { c.onclick = () => {
+  state.filter = c.dataset.filter; state.shown = PAGE_SIZE;
+  $$('#scanChips .chip').forEach((x) => x.classList.toggle('active', x === c));
+  renderScanList();
+}; });
+let filterTimer = 0;
+$('#scanFilter').oninput = (e) => { clearTimeout(filterTimer); filterTimer = setTimeout(() => { state.text = e.target.value; state.shown = PAGE_SIZE; renderScanList(); }, 150); };
+$('#scanSort').onchange = (e) => { state.sort = e.target.value; renderScanList(); };
+
+function selectedProducts() { return state.scan ? state.scan.results.filter((p) => state.selected.has(p.id)) : []; }
+
+function renderSelBar() {
+  const n = state.selected.size;
+  $('#selBar').classList.toggle('hidden', !(state.tab === 'scan' && n > 0));
+  if (!n) return;
+  const picked = selectedProducts();
+  const variants = picked.reduce((a, p) => a + p.variants.filter((v) => v.salePrice).length, 0);
+  const units = picked.reduce((a, p) => a + p.totalInventory, 0);
+  $('#selText').textContent = `${n.toLocaleString()} product${n > 1 ? 's' : ''} selected`;
+  $('#selSub').textContent = `${variants.toLocaleString()} variant${variants > 1 ? 's' : ''} · ${units.toLocaleString()} in stock`;
+}
+
+// ---------------- Apply a sale ----------------
+$('#btnApply').onclick = () => {
+  const picked = selectedProducts();
+  if (!picked.length) return;
+  const today = state.config ? state.config.today : new Date().toISOString().slice(0, 10);
+  const variants = picked.reduce((a, p) => a + p.variants.filter((v) => v.salePrice).length, 0);
+  const m = modal({
+    title: 'Apply Sale',
+    body: `<div class="info-box">For <b>${picked.length.toLocaleString()} products</b> (${variants.toLocaleString()} variants), on the start date:
+        <ul style="margin:6px 0 0;padding-left:18px">
+          <li>Compare-at price = the current price</li>
+          <li>Price = 60% of the current price, rounded up to x9.99</li>
+          <li>Tags <span class="mono">sale</span> and <span class="mono">40off</span> added</li>
+        </ul>
+        After the end date everything is put back (price, compare-at price, tags).</div>
+      <form id="applyForm" style="display:flex;flex-direction:column;gap:12px">
+        <label class="f">Sale name<input class="inp" name="name" maxlength="100" placeholder="40% off ${esc(today)}" /></label>
+        <div class="two">
+          <label class="f">Start date<input class="inp" type="date" name="start" min="${esc(today)}" value="${esc(today)}" required /></label>
+          <label class="f">End date (last day of the sale)<input class="inp" type="date" name="end" min="${esc(today)}" required /></label>
+        </div>
+        <div class="small muted">Dates are Vancouver time: the sale starts at 00:00 on the start date and ends at 24:00 on the end date.
+          A sale starting today is applied right away.</div>
+        <label class="f">Manager password<input class="inp" type="password" name="password" autocomplete="off" /></label>
+        <div class="err" id="applyErr"></div>
+      </form>`,
+    foot: '<button class="btn" type="button" data-a="cancel">Cancel</button><button class="btn sale" type="button" data-a="ok">Apply sale</button>'
+  });
+  const form = $('#applyForm', m.body);
+  form.start.onchange = () => { form.end.min = form.start.value || today; };
+  $('[data-a=cancel]', m.foot).onclick = () => m.close();
+  const submit = async () => {
+    const err = $('#applyErr', m.body);
+    err.textContent = '';
+    if (!form.end.value) { err.textContent = 'Please choose the end date.'; form.end.focus(); return; }
+    const btn = $('[data-a=ok]', m.foot);
+    btn.disabled = true;
+    try {
+      const res = await api('createCampaign', {
+        name: form.name.value, startDate: form.start.value, endDate: form.end.value,
+        scanId: state.scan.id, productIds: picked.map((p) => p.id), password: form.password.value
+      });
+      m.close();
+      state.selected.clear();
+      toast(res.startsNow ? 'Sale created. Applying prices…' : 'Sale scheduled.', 'ok');
+      setTab('sales');
+      await openDetail(res.id);
+      if (res.startsNow) await runCampaign(res.id);
+    } catch (e) {
+      err.textContent = e.message;
+      btn.disabled = false;
+    }
+  };
+  $('[data-a=ok]', m.foot).onclick = submit;
+  form.onsubmit = (e) => { e.preventDefault(); submit(); };
+};
+
+// ---------------- Sales ----------------
+async function loadSales() {
+  const box = $('#salesList');
+  box.classList.remove('hidden');
+  $('#saleDetail').classList.add('hidden');
+  if (!state.campaigns.length) box.innerHTML = '<div class="empty"><span class="spin"></span></div>';
+  try {
+    state.campaigns = (await api('listCampaigns')).campaigns;
+  } catch (e) {
+    box.innerHTML = `<div class="err">${esc(e.message)}</div>`;
+    return;
+  }
+  renderSalesBadge();
+  if (!state.campaigns.length) { box.innerHTML = '<div class="empty">No sales yet. Find products and press "Apply sale".</div>'; return; }
+  box.innerHTML = `<div class="table-wrap"><table class="grid">
+    <thead><tr><th>Sale</th><th>Dates</th><th>Status</th><th class="num">Products</th><th class="hide-sm">Created</th></tr></thead>
+    <tbody>${state.campaigns.map((c) => `<tr class="click" data-id="${c.id}">
+      <td><div class="pname">${esc(c.name)}</div>${c.errors ? `<span class="tag bad">${c.errors} with errors</span>` : ''}</td>
+      <td class="nowrap">${esc(c.startDate)} → ${esc(c.endDate)}</td>
+      <td>${stateTag(SALE_STATES, c.state)}</td>
+      <td class="num">${(c.counts.ON_SALE || 0) + (c.counts.ENDED || 0)} / ${c.total}</td>
+      <td class="hide-sm small muted">${esc(c.createdBy)} · ${esc(fmtTime(c.createdAt))}</td>
+    </tr>`).join('')}</tbody></table></div>`;
+  $$('tr[data-id]', box).forEach((tr) => { tr.onclick = () => openDetail(Number(tr.dataset.id)); });
+}
+
+function renderSalesBadge() {
+  const live = state.campaigns.filter((c) => c.state === 'ON_SALE' || c.state === 'STARTING' || c.state === 'ENDING').length;
+  const badge = $('#salesBadge');
+  badge.textContent = live ? String(live) : '';
+  badge.classList.toggle('hidden', !live);
+}
+
+function closeDetail() { state.detailId = 0; state.detail = null; }
+
+async function openDetail(id) {
+  state.detailId = id;
+  $('#salesList').classList.add('hidden');
+  const box = $('#saleDetail');
+  box.classList.remove('hidden');
+  if (!state.detail || state.detail.id !== id) box.innerHTML = '<div class="empty"><span class="spin"></span></div>';
+  try {
+    renderDetail(await api('getCampaign', { id }));
+  } catch (e) {
+    box.innerHTML = `<button class="link" type="button" id="backBtn">← All sales</button><div class="err">${esc(e.message)}</div>`;
+    $('#backBtn').onclick = () => { closeDetail(); loadSales(); };
+  }
+}
+
+let running = false;
+// Applies / restores the due products, in rounds, while the server says there is more
+async function runCampaign(id) {
+  if (running) return;
+  running = true;
+  try {
+    for (let round = 0; round < 200; round++) {
+      const res = await api('processCampaign', { id });
+      if (state.detailId === id) renderDetail(res);
+      if (!res.more || !res.processed) break;
+    }
+  } catch (e) {
+    toast(e.message, 'bad');
+  } finally {
+    running = false;
+    if (state.detailId === id) openDetail(id);
+  }
+}
+
+function itemVariants(item) {
+  // After the product was put on sale: the saved original and sale prices; before that: the scan's numbers
+  if (item.changes) return item.changes.map((c) => ({ title: c.title, sku: c.sku, barcode: c.barcode, price: c.origPrice, compareAtPrice: c.origCompareAt, salePrice: c.salePrice }));
+  return (item.snapshot || []).map((v) => ({ title: v.title, sku: v.sku, barcode: v.barcode, price: v.price, compareAtPrice: v.compareAtPrice, salePrice: v.salePrice }));
+}
+
+function renderDetail(c) {
+  state.detail = c;
+  const box = $('#saleDetail');
+  const counts = c.counts || {};
+  const done = (counts.ON_SALE || 0) + (counts.ENDED || 0) + (counts.SKIPPED || 0) + (counts.CANCELED || 0);
+  const restoring = c.state === 'ENDING';
+  const pct = c.total ? Math.round(((restoring ? (counts.ENDED || 0) + (counts.SKIPPED || 0) + (counts.CANCELED || 0) : done)) / c.total * 100) : 0;
+  const canRun = c.state === 'STARTING' || c.state === 'ENDING';
+  const open = c.state === 'SCHEDULED' || c.state === 'STARTING' || c.state === 'ON_SALE';
+  const stuck = c.items.filter((i) => i.stuck).length;
+  const summary = Object.entries(ITEM_STATES).filter(([k]) => counts[k]).map(([k, [label, kind]]) => `<span class="tag ${kind}">${label} ${counts[k]}</span>`).join(' ');
+  const who = c.canceledAt ? `Canceled by ${esc(c.canceledBy)} at ${esc(fmtTime(c.canceledAt))}` : c.endedEarlyBy ? `Ended early by ${esc(c.endedEarlyBy)}` : '';
+  box.innerHTML = `
+    <button class="link" type="button" id="backBtn">← All sales</button>
+    <div class="detail-head" style="margin-top:8px">
+      <div>
+        <h2>${esc(c.name)}</h2>
+        <div class="small muted">${esc(c.startDate)} 00:00 → ${esc(c.endDate)} 24:00 (Vancouver) · created by ${esc(c.createdBy)} at ${esc(fmtTime(c.createdAt))}${who ? ' · ' + who : ''}</div>
+        <div class="row" style="margin-top:8px">${stateTag(SALE_STATES, c.state)} ${summary}</div>
+      </div>
+      <div class="actions">
+        <button class="btn" type="button" id="dExport">⬇ Export Excel</button>
+        ${canRun ? `<button class="btn primary" type="button" id="dRun">${running ? '<span class="spin"></span> Working…' : (restoring ? 'Restore now' : 'Apply now')}</button>` : ''}
+        ${stuck ? `<button class="btn" type="button" id="dRetry">Retry failed (${stuck})</button>` : ''}
+        ${open ? '<button class="btn" type="button" id="dEndDate">Change end date</button>' : ''}
+        ${c.state === 'SCHEDULED' ? '<button class="btn danger" type="button" id="dCancel">Cancel sale</button>' : ''}
+        ${c.state === 'STARTING' || c.state === 'ON_SALE' ? '<button class="btn danger" type="button" id="dEnd">End sale now</button>' : ''}
+      </div>
+    </div>
+    ${canRun ? `<div class="card" style="margin-top:12px"><div class="row small"><span class="grow">${restoring ? 'Putting prices and tags back' : 'Putting products on sale'}: ${pct}%</span>
+      <span class="muted">This also runs automatically every 10 minutes.</span></div><div class="meter" style="margin-top:6px"><div style="width:${pct}%"></div></div></div>` : ''}
+    ${c.errors ? `<div class="bad-box" style="margin-top:12px">${c.errors} product${c.errors > 1 ? 's' : ''} had a Shopify error (see below). They are tried again automatically${stuck ? `; ${stuck} stopped after 5 tries: fix the cause and press "Retry failed"` : ''}.</div>` : ''}
+    <div class="section-title">Products</div>
+    <div class="table-wrap"><table class="grid">
+      <thead><tr><th>Product</th><th>Status</th><th>Price → Sale price</th><th class="hide-sm">Compare-at before</th><th class="hide-sm">On sale / Restored</th><th>Note</th></tr></thead>
+      <tbody>${c.items.map((i) => {
+        const vs = itemVariants(i);
+        const url = adminUrl(i.productId);
+        return `<tr>
+          <td><div class="pname">${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(i.title)}</a>` : esc(i.title)}</div><div class="psub">${esc(i.vendor)}</div></td>
+          <td>${stateTag(ITEM_STATES, i.status)}</td>
+          <td class="vlist">${vs.map((v) => `<div>${variantName(v) ? esc(variantName(v)) + ': ' : ''}${esc(fmtMoney(v.price))} → ${v.salePrice ? `<b>${esc(fmtMoney(v.salePrice))}</b>` : '<span class="muted">no change</span>'}</div>`).join('')}</td>
+          <td class="vlist hide-sm">${vs.map((v) => `<div>${v.compareAtPrice ? esc(fmtMoney(v.compareAtPrice)) : '<span class="muted">—</span>'}</div>`).join('')}</td>
+          <td class="small hide-sm nowrap">${esc(fmtTime(i.appliedAt))}${i.endedAt ? '<br>' + esc(fmtTime(i.endedAt)) : ''}</td>
+          <td class="small">${i.error ? `<div class="err">${esc(i.error)}</div>` : ''}${esc(i.note)}</td>
+        </tr>`;
+      }).join('')}</tbody></table></div>
+    <div class="section-title">History</div>
+    <div class="card small">${c.events.map((e) => `<div>${esc(fmtTime(e.at))} · <b>${esc(e.action.replace(/_/g, ' ').toLowerCase())}</b> · ${esc(e.by)}${e.note ? ' · ' + esc(e.note) : ''}</div>`).join('') || '<span class="muted">—</span>'}</div>`;
+  $('#backBtn').onclick = () => { closeDetail(); loadSales(); };
+  $('#dExport').onclick = () => exportCampaign(c);
+  const run = $('#dRun');
+  if (run) { run.disabled = running; run.onclick = () => runCampaign(c.id); }
+  const retry = $('#dRetry');
+  if (retry) retry.onclick = async () => { try { renderDetail(await api('retryCampaign', { id: c.id })); runCampaign(c.id); } catch (e) { toast(e.message, 'bad'); } };
+  const endDate = $('#dEndDate');
+  if (endDate) endDate.onclick = () => changeEndDate(c);
+  const cancel = $('#dCancel');
+  if (cancel) cancel.onclick = async () => {
+    const pw = await askPassword('Cancel Sale', `Cancel "${esc(c.name)}"? Nothing has been changed in Shopify yet.`);
+    if (pw == null) return;
+    try { renderDetail(await api('cancelCampaign', { id: c.id, password: pw })); toast('Sale canceled.', 'ok'); } catch (e) { toast(e.message, 'bad'); }
+  };
+  const end = $('#dEnd');
+  if (end) end.onclick = async () => {
+    const pw = await askPassword('End Sale Now', `End "${esc(c.name)}" now? Prices, compare-at prices and tags are put back right away.`);
+    if (pw == null) return;
+    try { renderDetail(await api('endCampaignNow', { id: c.id, password: pw })); await runCampaign(c.id); } catch (e) { toast(e.message, 'bad'); }
+  };
+}
+
+function changeEndDate(c) {
+  const today = state.config ? state.config.today : '';
+  const min = c.startDate > today ? c.startDate : today;
+  const m = modal({
+    title: 'Change End Date', narrow: true,
+    body: `<form id="endForm" style="display:flex;flex-direction:column;gap:10px">
+      <label class="f">New end date (last day of the sale)<input class="inp" type="date" name="end" min="${esc(min)}" value="${esc(c.endDate)}" required /></label>
+      <label class="f">Manager password<input class="inp" type="password" name="password" autocomplete="off" /></label>
+      <div class="err"></div></form>`,
+    foot: '<button class="btn" type="button" data-a="cancel">Cancel</button><button class="btn primary" type="button" data-a="ok">Save</button>'
+  });
+  const form = $('#endForm', m.body);
+  $('[data-a=cancel]', m.foot).onclick = () => m.close();
+  const save = async () => {
+    try {
+      renderDetail(await api('changeEndDate', { id: c.id, endDate: form.end.value, password: form.password.value }));
+      m.close();
+      toast('End date changed.', 'ok');
+    } catch (e) { $('.err', m.body).textContent = e.message; }
+  };
+  $('[data-a=ok]', m.foot).onclick = save;
+  form.onsubmit = (e) => { e.preventDefault(); save(); };
+}
+
+// ---------------- Excel ----------------
+function stamp() { return new Date().toISOString().slice(0, 10); }
+function safeName(s) { return String(s || '').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 60) || 'Sale'; }
+const money = (v) => (v == null || v === '' ? '' : Number(v));
+
+$('#btnExportScan').onclick = () => {
+  const list = filteredProducts();
+  if (!list.length) { toast('Nothing to export.', 'bad'); return; }
+  const rows = [['Selected', 'Product', 'Variant', 'SKU', 'Barcode', 'Vendor', 'Type', 'Product stock', 'Variant stock',
+    'Price', 'Compare-at price', 'Sale price', '% off', 'Created', 'Tags', 'Note', 'Shopify link']];
+  for (const p of list) {
+    const note = state.inSale[p.id] ? 'In sale: ' + state.inSale[p.id].name : p.canDiscount ? '' : 'Price too low';
+    for (const v of p.variants) {
+      rows.push([state.selected.has(p.id) ? 'Y' : '', p.title, variantName(v), v.sku, v.barcode, p.vendor, p.productType, p.totalInventory, v.inventoryQuantity,
+        money(v.price), money(v.compareAtPrice), money(v.salePrice), v.salePrice ? pctOff(v.price, v.salePrice) : '', fmtDate(p.createdAt), (p.tags || []).join(', '), note, adminUrl(p.id)]);
+    }
+  }
+  const info = [['Item', 'Value'],
+    ['Scan', fmtTime(state.scan.finishedAt)], ['Scanned by', state.scan.startedBy], ['No sales since', state.scan.since],
+    ['Rules', 'Active, stock > 0, not tagged sale / 20off / 40off, no orders in the last 2 years'],
+    ['Sale price', '60% of the price, rounded up to x9.99'], ['Products in this file', list.length], ['Selected', state.selected.size]];
+  downloadBlob(xlsxBuild([
+    { name: 'Products', widths: [9, 44, 18, 16, 16, 18, 16, 12, 12, 10, 14, 10, 7, 12, 30, 22, 46], rows },
+    { name: 'Scan', widths: [20, 70], rows: info }
+  ]), `Sale-candidates-${stamp()}.xlsx`);
+};
+
+function exportCampaign(c) {
+  const rows = [['Product', 'Variant', 'SKU', 'Barcode', 'Vendor', 'Status', 'Original price', 'Original compare-at', 'Sale price', '% off',
+    'On sale at', 'Restored at', 'Note', 'Error', 'Shopify link']];
+  for (const i of c.items) {
+    for (const v of itemVariants(i)) {
+      rows.push([i.title, variantName(v), v.sku, v.barcode, i.vendor, (ITEM_STATES[i.status] || [i.status])[0], money(v.price), money(v.compareAtPrice),
+        money(v.salePrice), v.salePrice ? pctOff(v.price, v.salePrice) : '', fmtTime(i.appliedAt), fmtTime(i.endedAt), i.note, i.error, adminUrl(i.productId)]);
+    }
+  }
+  const info = [['Item', 'Value'], ['Sale', c.name], ['Status', (SALE_STATES[c.state] || [c.state])[0]], ['Start', c.startDate + ' 00:00 (Vancouver)'],
+    ['End', c.endDate + ' 24:00 (Vancouver)'], ['Created by', c.createdBy], ['Created at', fmtTime(c.createdAt)], ['Products', c.total]];
+  const history = [['Time', 'Action', 'By', 'Note'], ...c.events.map((e) => [fmtTime(e.at), e.action, e.by, e.note])];
+  downloadBlob(xlsxBuild([
+    { name: 'Products', widths: [44, 18, 16, 16, 18, 11, 13, 17, 10, 7, 17, 17, 40, 30, 46], rows },
+    { name: 'Sale', widths: [14, 50], rows: info },
+    { name: 'History', widths: [17, 14, 16, 50], rows: history }
+  ]), `Sale-${safeName(c.name)}-${stamp()}.xlsx`);
+}
+
+// .xlsx writer: same as the inventory system's Warehouse Map export (New_WH web/index.html)
+/* Minimal .xlsx writer: sheets = [{name, widths, rows:[[...]]}]; row 1 is a bold, frozen header
+ * with an AutoFilter. Strings are written as inline text (UPCs keep leading zeros), numbers as numbers. */
+function xlsxXmlText(value) {
+  return String(value == null ? '' : value)
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]/g, '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function xlsxColumnName(index) {
+  let name = '';
+  for (let n = index + 1; n > 0; n = Math.floor((n - 1) / 26)) name = String.fromCharCode(65 + (n - 1) % 26) + name;
+  return name;
+}
+
+function xlsxSheetXml(sheet) {
+  const columnCount = Math.max(1, ...sheet.rows.map(row => row.length));
+  const lastCell = xlsxColumnName(columnCount - 1) + Math.max(1, sheet.rows.length);
+  const cols = (sheet.widths || []).map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join('');
+  const rowsXml = sheet.rows.map((row, rowIndex) => {
+    const style = rowIndex === 0 ? ' s="1"' : '';
+    const cells = row.map((value, columnIndex) => {
+      const ref = xlsxColumnName(columnIndex) + (rowIndex + 1);
+      if (typeof value === 'number' && Number.isFinite(value)) return `<c r="${ref}"${style}><v>${value}</v></c>`;
+      return `<c r="${ref}"${style} t="inlineStr"><is><t xml:space="preserve">${xlsxXmlText(value)}</t></is></c>`;
+    }).join('');
+    return `<row r="${rowIndex + 1}">${cells}</row>`;
+  }).join('');
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>' +
+    (cols ? `<cols>${cols}</cols>` : '') +
+    `<sheetData>${rowsXml}</sheetData>` +
+    (sheet.rows.length > 1 ? `<autoFilter ref="A1:${lastCell}"/>` : '') +
+    '</worksheet>';
+}
+
+function xlsxBuild(sheets) {
+  const names = sheets.map((sheet, index) => String(sheet.name || 'Sheet' + (index + 1)).replace(/[\[\]\*\?\/\\:]/g, ' ').slice(0, 31));
+  const files = [
+    ['[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+      '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+      sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('') +
+      '</Types>'],
+    ['_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+      '</Relationships>'],
+    ['xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' +
+      names.map((name, index) => `<sheet name="${xlsxXmlText(name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join('') +
+      '</sheets>' +
+      '<definedNames>' + sheets.map((sheet, index) => sheet.rows.length > 1
+        ? `<definedName name="_xlnm._FilterDatabase" localSheetId="${index}" hidden="1">'${xlsxXmlText(names[index].replace(/'/g, "''"))}'!$A$1:$${xlsxColumnName(Math.max(1, ...sheet.rows.map(row => row.length)) - 1)}$${sheet.rows.length}</definedName>` : '').join('') +
+      '</definedNames></workbook>'],
+    ['xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join('') +
+      `<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +
+      '</Relationships>'],
+    ['xl/styles.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<fonts count="2"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="11"/><name val="Arial"/></font></fonts>' +
+      '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEFEFEF"/><bgColor indexed="64"/></patternFill></fill></fills>' +
+      '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+      '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+      '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs>' +
+      '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
+      '</styleSheet>'],
+    ...sheets.map((sheet, index) => [`xl/worksheets/sheet${index + 1}.xml`, xlsxSheetXml(sheet)])
+  ];
+  return new Blob([zipStore(files)], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+}
+
+// Uncompressed (STORE) zip archive of [name, text] entries.
+function zipStore(files) {
+  const encoder = new TextEncoder();
+  if (!zipStore.crcTable) {
+    zipStore.crcTable = new Uint32Array(256);
+    for (let n = 0; n < 256; n += 1) {
+      let c = n;
+      for (let k = 0; k < 8; k += 1) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      zipStore.crcTable[n] = c >>> 0;
+    }
+  }
+  const crc32 = bytes => {
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i += 1) crc = zipStore.crcTable[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  };
+  const now = new Date();
+  const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | Math.floor(now.getSeconds() / 2);
+  const dosDate = ((Math.max(1980, now.getFullYear()) - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+  const parts = [];
+  const central = [];
+  let offset = 0;
+  files.forEach(([name, text]) => {
+    const nameBytes = encoder.encode(name);
+    const data = encoder.encode(text);
+    const crc = crc32(data);
+    const local = new DataView(new ArrayBuffer(30));
+    local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true); local.setUint16(6, 0x0800, true);
+    local.setUint16(8, 0, true); local.setUint16(10, dosTime, true); local.setUint16(12, dosDate, true);
+    local.setUint32(14, crc, true); local.setUint32(18, data.length, true); local.setUint32(22, data.length, true);
+    local.setUint16(26, nameBytes.length, true); local.setUint16(28, 0, true);
+    parts.push(new Uint8Array(local.buffer), nameBytes, data);
+    const header = new DataView(new ArrayBuffer(46));
+    header.setUint32(0, 0x02014b50, true); header.setUint16(4, 20, true); header.setUint16(6, 20, true);
+    header.setUint16(8, 0x0800, true); header.setUint16(10, 0, true); header.setUint16(12, dosTime, true);
+    header.setUint16(14, dosDate, true); header.setUint32(16, crc, true); header.setUint32(20, data.length, true);
+    header.setUint32(24, data.length, true); header.setUint16(28, nameBytes.length, true);
+    header.setUint32(42, offset, true);
+    central.push(new Uint8Array(header.buffer), nameBytes);
+    offset += 30 + nameBytes.length + data.length;
+  });
+  const centralSize = central.reduce((total, part) => total + part.length, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true);
+  end.setUint32(12, centralSize, true); end.setUint32(16, offset, true);
+  const all = [...parts, ...central, new Uint8Array(end.buffer)];
+  const out = new Uint8Array(all.reduce((total, part) => total + part.length, 0));
+  let position = 0;
+  all.forEach(part => { out.set(part, position); position += part.length; });
+  return out;
+}
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ---------------- Settings ----------------
+function renderConfig() {
+  const cfg = state.config;
+  if (!cfg) return;
+  const sh = cfg.shopify;
+  $('#shopifyStatus').innerHTML = sh.connected
+    ? `<span class="tag ok">Connected</span> ${esc(sh.store)}`
+    : sh.error ? `<span class="tag bad">Not set up</span> ${esc(sh.error)}` : '<span class="tag">Not connected</span> Add the Shopify secrets in Supabase (see SALE-MANAGER.md).';
+  $('#tickStatus').innerHTML = cfg.lastTick
+    ? `Last automatic run: ${esc(fmtTime(cfg.lastTick))}. Runs every 10 minutes when a sale starts or ends, or a scan is running.`
+    : 'No automatic run yet. It runs every 10 minutes when a sale starts or ends, or a scan is running.';
+  const r = cfg.rules;
+  $('#howItWorks').innerHTML = `<ol style="margin:0;padding-left:18px">
+    <li><b>Find Products</b> lists active products with stock, without the tags ${r.blockedTags.map((t) => `<span class="mono">${esc(t)}</span>`).join(', ')},
+      and with no orders (canceled orders don't count) in the last ${r.years} years.</li>
+    <li>Select products and press <b>Apply sale</b> (manager password) with a start and end date.</li>
+    <li>On the start date each variant gets compare-at price = its price and price = ${r.percent}% rounded up to x9.99
+      (e.g. $123.00 → $79.99; a variant whose sale price would not be lower keeps its price). Tags ${r.saleTags.map((t) => `<span class="mono">${esc(t)}</span>`).join(' + ')} are added.</li>
+    <li>After the end date the price, compare-at price and tags are put back. A price someone changed by hand during the sale is left as it is (noted on the sale).</li>
+  </ol>`;
+  $('#criteria').innerHTML = `<li>No sales in the last ${r.years} years</li>
+    <li>Not tagged ${r.blockedTags.map((t) => `<span class="mono">${esc(t)}</span>`).join(', ')}</li><li>Stock more than 0</li>`;
+}
+
+$('#shopifyTest').onclick = async () => {
+  const out = $('#shopifyTestResult');
+  out.innerHTML = '<span class="spin"></span>';
+  try {
+    const r = await api('shopifyTest');
+    out.innerHTML = `<span class="tag ok">OK</span> ${esc(r.shopName)} (${esc(r.domain)})`;
+  } catch (e) {
+    out.innerHTML = `<span class="err">${esc(e.message)}</span>`;
+  }
+};
+
+$('#pwForm').onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    await api('setPassword', { key: $('#pwKey').value, value: $('#pwNew').value, password: $('#pwAdmin').value });
+    if ($('#pwKey').value === 'pw_access') store('sale_code', $('#pwNew').value);
+    $('#pwNew').value = ''; $('#pwAdmin').value = '';
+    toast('Password saved.', 'ok');
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
+};
+
+// ---------------- Start ----------------
+renderUser();
+(async () => {
+  if (!store('sale_user')) { showLogin(''); return; }
+  try {
+    state.config = await api('ping');
+    renderConfig();
+    loadScan();
+    api('listCampaigns').then((r) => { state.campaigns = r.campaigns; renderSalesBadge(); }).catch(() => {});
+  } catch (e) {
+    if (e.code !== 'ACCESS' && e.code !== 'NEED_USER') $('#scanStatus').innerHTML = `<span class="err">${esc(e.message)}</span>`;
+  }
+})();
+</script>
+</body>
+</html>

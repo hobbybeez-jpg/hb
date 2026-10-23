@@ -1,0 +1,26 @@
+# 特價商品管理（Sale Manager）的自動測試：sale-manager 的程式、migration 或測試有變動時執行。
+name: sale-manager test
+
+on:
+  push:
+    branches: [main]
+    paths: ['supabase/functions/sale-manager/**', 'supabase/migrations/*sale_manager*', 'tests/sale-manager/**']
+  pull_request:
+    paths: ['supabase/functions/sale-manager/**', 'supabase/migrations/*sale_manager*', 'tests/sale-manager/**']
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Test
+        working-directory: tests/sale-manager
+        run: |
+          npm install --no-audit --no-fund
+          npm test
