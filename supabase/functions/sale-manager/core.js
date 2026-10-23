@@ -248,8 +248,8 @@ async function readProducts(db, shopify, scanId, url) {
   const rows = await db.transaction((tx) => tx.query("select to_char(since, 'YYYY-MM-DD') as since from sale.scans where id = $1", [scanId]));
   const ordersOp = await shopify.startBulkQuery(ordersBulkQuery(rows[0].since));
   await db.transaction((tx) => tx.query(
-    `update sale.scans set status = 'ORDERS', orders_op = $2, candidates = $3::jsonb,
-       stats = $4::jsonb, attempt_at = null where id = $1`,
+    `update sale.scans set status = 'ORDERS', orders_op = $2, candidates = $3::text::jsonb,
+       stats = $4::text::jsonb, attempt_at = null where id = $1`,
     [scanId, ordersOp, JSON.stringify(candidates), JSON.stringify(stats)]));
 }
 
@@ -264,7 +264,7 @@ async function readOrders(db, shopify, scanId, url) {
   const stats = Object.assign({}, rows[0].stats, { orders: collector.orders, sold: sold.size, matches: results.length });
   delete stats.read;
   await db.transaction((tx) => tx.query(
-    `update sale.scans set status = 'DONE', results = $2::jsonb, stats = $3::jsonb, candidates = null,
+    `update sale.scans set status = 'DONE', results = $2::text::jsonb, stats = $3::text::jsonb, candidates = null,
        attempt_at = null, finished_at = now() where id = $1`,
     [scanId, JSON.stringify(results), JSON.stringify(stats)]));
 }
@@ -323,7 +323,7 @@ async function applyItem(db, shopify, item) {
     changes = planChanges(live.variants);
     if (!changes.length) return finishItem(db, item.id, 'SKIPPED', 'Price is too low for a sale price ending in 9.99.');
     // Saved before Shopify is changed, so a retry never mistakes the sale price for the original price
-    await db.transaction((tx) => tx.query('update sale.items set changes = $2::jsonb where id = $1', [item.id, JSON.stringify(changes)]));
+    await db.transaction((tx) => tx.query('update sale.items set changes = $2::text::jsonb where id = $1', [item.id, JSON.stringify(changes)]));
   }
   const ids = new Set(live.variants.map((v) => v.id));
   const apply = changes.filter((c) => ids.has(c.id));
@@ -630,7 +630,7 @@ const API = {
     await tx.query(
       `insert into sale.items (campaign_id, product_id, title, handle, vendor, snapshot)
        select $1, x.product_id, x.title, x.handle, x.vendor, x.snapshot
-       from jsonb_to_recordset($2::jsonb) as x(product_id text, title text, handle text, vendor text, snapshot jsonb)`,
+       from jsonb_to_recordset($2::text::jsonb) as x(product_id text, title text, handle text, vendor text, snapshot jsonb)`,
       [id, JSON.stringify(items)]);
     await logEvent(tx, id, 'CREATE', user, `${items.length} products, ${start} to ${end}.`);
     return { id, startsNow: !!rows[0].started };
