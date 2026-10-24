@@ -48,7 +48,7 @@ function world(orders, { stepMs = 1000 } = {}) {
     LockService: { getScriptLock: () => ({ waitLock() {}, tryLock: () => true, releaseLock() {} }) },
     MailApp: { sendEmail: (...a) => mails.push(a) },
     Session: { getActiveUser: () => ({ getEmail: () => '' }), getScriptTimeZone: () => 'America/Vancouver' },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => props[k] || null, setProperty: (k, v) => { props[k] = String(v); }, setProperties: (o) => Object.assign(props, o) }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => props[k] || null, setProperty: (k, v) => { props[k] = String(v); }, setProperties: (o) => Object.assign(props, o), deleteProperty: (k) => { delete props[k]; } }) },
     CacheService: { getScriptCache: () => ({ get: (k) => cache[k] || null, put: (k, v) => { cache[k] = v; }, remove: (k) => { delete cache[k]; } }) },
     ScriptApp: { getProjectTriggers: () => triggers.slice(), deleteTrigger: (t) => { triggers = triggers.filter((x) => x !== t); }, newTrigger: builder },
     module: undefined
@@ -76,7 +76,7 @@ function order(name, created, updated, over) {
   }, over);
 }
 
-test('自動執行：寫入可寫入的單、需確認的寄信、舊單略過、進度往前；再跑一次不重複', () => {
+test('自動執行：寫入可寫入的單、有需確認的才寄信、舊單略過、進度往前；再跑一次不重複', () => {
   const orders = [
     order('CA1D', '2026-10-13T10:00:00Z', '2026-10-13T10:01:00Z'),
     order('CA2D', '2026-10-13T11:00:00Z', '2026-10-13T11:01:00Z', { cancelled: false, financialStatus: 'partially_refunded' }),
@@ -93,8 +93,9 @@ test('自動執行：寫入可寫入的單、需確認的寄信、舊單略過�
   assert.equal(last.skipped, 1); // CA0D：舊單，沒有新付款
   assert.equal(w.ca.get('A2').v, 'CA1D');
   assert.equal(w.mails.length, 1);
-  assert.match(w.mails[0][1], /寫入 1 張，1 張要人工處理/);
+  assert.match(w.mails[0][1], /1 張要人工處理/);
   assert.match(w.mails[0][2], /CA2D［需確認］/);
+  assert.doesNotMatch(w.mails[0][2], /已寫入：/);
   assert.equal(w.props.AUTO_CURSOR, w.props.AUTO_WINDOW_START);
   // 下一次排程：沒有新的更新 → 不寫、不寄信
   w.ctx.autoRun();
@@ -102,27 +103,38 @@ test('自動執行：寫入可寫入的單、需確認的寄信、舊單略過�
   assert.equal(w.mails.length, 1);
 });
 
-test('自動執行：時間不夠時停在下一張、排 1 分鐘後繼續，這一輪的起點不變，最後只寄一封信', () => {
-  const orders = [1, 2, 3, 4].map((i) => order('CA' + i + 'D', '2026-10-13T1' + i + ':00:00Z', '2026-10-13T1' + i + ':01:00Z'));
-  // 舊單：上一輪之前下單、這一輪中間才更新，而且這一輪才付款 → 要處理
-  orders.push(order('CA9D', '2026-10-12T10:00:00Z', '2026-10-13T18:00:00Z', { paidAt: '2026-10-13T18:00:00Z' }));
+test('自動執行：照單號順序寫入（不是更新時間）；時間不夠時分段做，同一個範圍、跳過做過的；都可寫入就不寄信', () => {
+  // 更新時間的順序是 CA3D、CA1D、CA4D、CA2D
+  const orders = [
+    order('CA3D', '2026-10-13T13:00:00Z', '2026-10-13T13:01:00Z'),
+    order('CA1D', '2026-10-13T11:00:00Z', '2026-10-13T14:00:00Z'),
+    order('CA4D', '2026-10-13T14:00:00Z', '2026-10-13T14:30:00Z'),
+    order('CA2D', '2026-10-13T12:00:00Z', '2026-10-13T16:00:00Z'),
+    // 舊單：上一輪之前下單、這一輪才付款 → 要處理
+    order('CA9D', '2026-10-12T10:00:00Z', '2026-10-13T18:00:00Z', { paidAt: '2026-10-13T18:00:00Z' })
+  ];
   const w = world(orders, { stepMs: 100000 });
   w.ctx.autoEnable();
   w.ctx.autoRun();
-  assert.equal(w.props.AUTO_WINDOW_START, '2026-10-13T07:00:00.000Z');
-  assert.notEqual(w.props.AUTO_CURSOR, w.props.AUTO_WINDOW_START);
+  assert.equal(w.props.AUTO_CURSOR, '2026-10-13T07:00:00.000Z');
+  assert.ok(w.props.AUTO_WINDOW_TO);
+  const windowTo = w.props.AUTO_WINDOW_TO;
   assert.deepEqual(w.triggers.filter((t) => t.handler === 'autoContinue').map((t) => t.after), [60000]);
-  assert.equal(w.mails.length, 0);
   let guard = 0;
   while (w.triggers.some((t) => t.handler === 'autoContinue') && guard++ < 10) w.ctx.autoContinue();
   const last = JSON.parse(w.props.AUTO_LAST);
   assert.deepEqual(last.written.map((x) => x.name), ['CA1D', 'CA2D', 'CA3D', 'CA4D', 'CA9D']);
-  // 後面幾段查詢的「舊單」起點還是這一輪的起點
-  assert.ok(w.lists.length > 1);
-  assert.deepEqual([...new Set(w.lists.map((l) => l.oldBefore))], ['2026-10-13T07:00:00.000Z']);
-  assert.equal(w.mails.length, 1);
-  assert.match(w.mails[0][1], /寫入 5 張/);
-  assert.equal(w.props.AUTO_CURSOR, w.props.AUTO_WINDOW_START);
+  assert.deepEqual([2, 3, 4, 5, 6].map((r) => w.ca.get('A' + r).v), ['CA1D', 'CA2D', 'CA3D', 'CA4D', 'CA9D']);
+  // 分段做的每一段都是同一個範圍、同一個舊單起點；做完還有時間就接著從這一輪的終點做到現在
+  const first = w.lists.filter((l) => l.from !== windowTo);
+  assert.ok(first.length > 1);
+  assert.deepEqual([...new Set(first.map((l) => l.from + '|' + l.oldBefore))], ['2026-10-13T07:00:00.000Z|2026-10-13T07:00:00.000Z']);
+  assert.ok(w.lists.slice(first.length).every((l) => l.from === windowTo && l.oldBefore === windowTo));
+  assert.ok(w.props.AUTO_CURSOR >= windowTo);
+  assert.equal(w.props.AUTO_WINDOW_TO, undefined);
+  assert.equal(w.props.AUTO_DONE, undefined);
+  // 沒有要人工處理的 → 不寄信
+  assert.equal(w.mails.length, 0);
 });
 
 test('自動執行：AUTO_HOURS 格式不對會提醒，不建立排程', () => {

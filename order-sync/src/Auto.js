@@ -1,9 +1,11 @@
 // Auto.js — 自動執行：每天在「設定」AUTO_HOURS 的時間（例如 9,21）掃描上次之後有更新的訂單，
-// 「可寫入」的直接寫，其他（需確認、錯誤、部分已登記）寄信給 ALERT_EMAIL，到逐筆／批次畫面人工處理。
+// 照單號順序處理：「可寫入」的直接寫；其他（需確認、錯誤、部分已登記）或執行失敗才寄信給 ALERT_EMAIL，到逐筆／批次畫面人工處理。
 //
 // 指令碼屬性：
-//   AUTO_CURSOR        這個時間之後有更新的訂單還沒看過（照更新時間處理，時間不夠時停在下一張）
-//   AUTO_WINDOW_START  這一輪的起點：在這之前下單的算舊單（之前的輪次處理過，只有之後有新付款才處理）
+//   AUTO_CURSOR        這一輪的起點：這個時間之後有更新的訂單
+//   AUTO_WINDOW_START  在這之前下單的算舊單（之前的輪次處理過，只有之後有新付款才處理）；通常和 AUTO_CURSOR 相同
+//   AUTO_WINDOW_TO     這一輪的終點（時間不夠分段做時才有，下一段用同一個範圍）
+//   AUTO_DONE          這一輪已經處理過的單號（分段做時跳過）
 //   AUTO_LAST          上次執行的摘要（選單「自動執行狀態」顯示）
 
 var AUTO_TIME_LIMIT_MS = 240000;  // 一次最多 6 分鐘，留時間寄信和排下一段
@@ -135,20 +137,42 @@ function autoExecute_(fromTrigger) {
 
 function autoProcess_(r, began) {
   var props = autoProps_();
-  var cursor = props.getProperty('AUTO_CURSOR');
-  if (!cursor) throw new Error('還沒設定自動處理的起始日，請用選單「開啟自動執行」。');
-  var windowStart = new Date(props.getProperty('AUTO_WINDOW_START') || cursor);
-  var to = new Date();
-  var list = shopifyListUpdated(new Date(cursor), to, windowStart);
-  var session = newSession_();
-  session.warmUp(Number(Utilities.formatDate(to, getSettings().TIMEZONE || 'America/Vancouver', 'yyyy')));
-  for (var i = 0; i < list.length; i++) {
-    if (Date.now() - began > AUTO_TIME_LIMIT_MS) {
-      autoAdvance_(props, list, i, to);
-      r.more = true;
+  if (!props.getProperty('AUTO_CURSOR')) throw new Error('還沒設定自動處理的起始日，請用選單「開啟自動執行」。');
+  var session = null;
+  // 上一段沒做完的範圍先做完；做完還有時間就接著做到現在
+  for (var round = 0; round < 2; round++) {
+    var from = new Date(props.getProperty('AUTO_CURSOR'));
+    var oldBefore = new Date(props.getProperty('AUTO_WINDOW_START') || from);
+    var carried = props.getProperty('AUTO_WINDOW_TO');
+    var to = carried ? new Date(carried) : new Date();
+    var done = {};
+    String(props.getProperty('AUTO_DONE') || '').split(',').filter(String).forEach(function (n) { done[n] = true; });
+    var list = shopifyListUpdated(from, to, oldBefore).filter(function (o) { return !done[o.name]; });
+    list.sort(function (a, b) { return autoOrderNumber_(a.name) - autoOrderNumber_(b.name) || String(a.createdAt).localeCompare(String(b.createdAt)); });
+    if (!session) {
+      session = newSession_();
+      session.warmUp(Number(Utilities.formatDate(to, getSettings().TIMEZONE || 'America/Vancouver', 'yyyy')));
+    }
+    var stop = autoProcessList_(r, began, list, session, done);
+    if (stop) {
+      // 時間不夠或寫到一半失敗：記住這一輪的範圍和處理過的單號，下一段接著做
+      props.setProperties({ AUTO_WINDOW_TO: to.toISOString(), AUTO_DONE: Object.keys(done).join(',') });
+      if (stop === 'time') r.more = true;
       return;
     }
+    props.setProperties({ AUTO_CURSOR: to.toISOString(), AUTO_WINDOW_START: to.toISOString() });
+    props.deleteProperty('AUTO_WINDOW_TO');
+    props.deleteProperty('AUTO_DONE');
+    if (!carried || Date.now() - began > AUTO_TIME_LIMIT_MS) return;
+  }
+}
+
+// 照順序處理清單；處理過的單號記到 done。回傳 'time'（時間不夠）、'failed'（寫到一半失敗）或 ''（做完）
+function autoProcessList_(r, began, list, session, done) {
+  for (var i = 0; i < list.length; i++) {
+    if (Date.now() - began > AUTO_TIME_LIMIT_MS) return 'time';
     var o = list[i];
+    done[o.name] = true;
     var pre = listPrecheck_(o);
     if (pre) {
       if (pre.status === 'done') r.done++; else r.skipped++;
@@ -163,11 +187,10 @@ function autoProcess_(r, began) {
         if (w.ok) {
           r.written.push({ name: o.name, summary: plan.summary, emailed: !!w.emailed });
         } else if (w.partial) {
-          // 寫到一半失敗：試算表可能有一部分的列，先停下來等人工處理，其他單下次再做
+          // 寫到一半失敗：試算表可能有一部分的列，先停下來等人工處理，其他單下次排程再做
           r.attention.push({ name: o.name, status: 'partial-write', note: w.message });
           r.error = o.name + ' 寫到一半失敗，這次先停止，其他訂單下次排程再處理。';
-          autoAdvance_(props, list, i + 1, to);
-          return;
+          return 'failed';
         } else {
           session.restoreRows(saved);
           r.attention.push({ name: o.name, status: 'error', note: w.message });
@@ -184,18 +207,18 @@ function autoProcess_(r, began) {
       r.attention.push({ name: o.name, status: 'error', note: e.message });
     }
   }
-  autoAdvance_(props, list, list.length, to);
+  return '';
 }
 
-// 下次從第 next 張（的更新時間）繼續，這一輪的起點不變；全部做完 → 下一輪從這次開始的時間接著
-function autoAdvance_(props, list, next, to) {
-  if (next < list.length) props.setProperty('AUTO_CURSOR', list[next].updatedAt);
-  else props.setProperties({ AUTO_CURSOR: to.toISOString(), AUTO_WINDOW_START: to.toISOString() });
+// CA53487D → 53487（排序用；不是這種格式的排最後）
+function autoOrderNumber_(name) {
+  var m = /(\d+)/.exec(String(name || ''));
+  return m ? Number(m[1]) : Infinity;
 }
 
 var AUTO_STATUS_TEXT = { warn: '需確認', error: '錯誤', partial: '部分已登記', 'partial-write': '寫到一半失敗' };
 
-function autoSummaryText_(r) {
+function autoSummaryText_(r, withWritten) {
   var lines = [autoFormat_(r.at) + '：寫入 ' + r.written.length + ' 張，要人工處理 ' + r.attention.length + ' 張，等待中 ' + r.waiting +
     ' 張，已登記 ' + r.done + ' 張，略過 ' + r.skipped + ' 張' + (r.more ? '（還沒做完，1 分鐘後繼續）' : '')];
   if (r.error) lines.push('執行失敗：' + r.error);
@@ -203,20 +226,20 @@ function autoSummaryText_(r) {
     lines.push('', '要人工處理（到「開啟逐筆／批次處理」輸入單號檢視）：');
     r.attention.forEach(function (a) { lines.push('・' + a.name + '［' + (AUTO_STATUS_TEXT[a.status] || a.status) + '］' + (a.summary ? a.summary + '：' : '') + a.note); });
   }
-  if (r.written.length) {
+  if (withWritten !== false && r.written.length) {
     lines.push('', '已寫入：');
     r.written.forEach(function (w) { lines.push('・' + w.name + '　' + w.summary + (w.emailed ? '（預購金額對不起來，已另外寄信）' : '')); });
   }
   return lines.join('\n');
 }
 
-// 有寫入、要人工處理或執行失敗才寄信
+// 只有要人工處理或執行失敗才寄信（預購應付和已付對不起來的通知另外寄，見 Main.writePlan_）
 function autoEmail_(r) {
   var to = getSettings().ALERT_EMAIL;
-  if (!to || (!r.written.length && !r.attention.length && !r.error)) return;
-  var subject = '[記單自動化] ' + (r.error ? '執行失敗　' : '') + '寫入 ' + r.written.length + ' 張' + (r.attention.length ? '，' + r.attention.length + ' 張要人工處理' : '');
+  if (!to || (!r.attention.length && !r.error)) return;
+  var subject = '[記單自動化] ' + (r.error ? '執行失敗' + (r.attention.length ? '，' : '') : '') + (r.attention.length ? r.attention.length + ' 張要人工處理' : '');
   try {
-    MailApp.sendEmail(to, subject, autoSummaryText_(r) + '\n\n控制台：' + SpreadsheetApp.getActiveSpreadsheet().getUrl());
+    MailApp.sendEmail(to, subject, autoSummaryText_(r, false) + '\n\n控制台：' + SpreadsheetApp.getActiveSpreadsheet().getUrl());
   } catch (e) {
     console.error('寄信失敗：' + e.message);
   }
