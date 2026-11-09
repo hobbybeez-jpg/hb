@@ -150,6 +150,11 @@ on conflict (key) do update set value = excluded.value, updated_at = now();
   Bluefin 1147025、1156607、1161262，Plamod 164431279，Milestone MS26-1252、amazon。
   （在庫存系統打開一張還沒追蹤的舊單，會讓它加入追蹤；這類單用同樣方式設為 ignored 即可。）
   要把較舊的點貨單加入追蹤：`insert into trk.shipments (shipment_id, supplier, name, created_at) select shipment_id, supplier, name, created_at from wh.shipments where shipment_id = '...';`
+- **在庫存系統刪除的點貨單**（庫存系統 Receiving → Edit Shipment → Delete Shipment，只限尚未收貨、尚未分配的單）：
+  追蹤頁還沒做任何步驟（步驟 2～5 都沒完成、沒有 Renfrew 清點或庫存、沒有 Shopify 調貨單）時，下次開啟清單就會**自動從追蹤清單移除**，
+  之後用同一個名稱重新匯入會當成新的單重新開始。已經做過步驟的單不會自動移除，清單上顯示紅色「Deleted in inventory」，
+  需要時用上面的 `ignored = true` 隱藏。庫存系統會擋下已按 Qty Confirmed 的單，要先在追蹤頁 Undo 步驟 2 才能刪。
+  被設為 ignored 的單、以及庫存系統已封存（`wh.shipments_archive`）的單不受影響。
 - 明細：即時讀取 `wh.shipment_lines`、`wh.products`、`wh.allocations`（封存後改讀 `*_archive`）。
   - PO＝`required_po_qty`；已分配＝PO 分配＋已揀貨出貨的 PO。
   - RENFREW＝`required_renfrew_qty`；已分配＝RENFREW 分配。
