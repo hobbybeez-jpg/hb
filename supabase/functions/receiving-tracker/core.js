@@ -175,6 +175,29 @@ async function syncShipments(tx) {
        and s.created_at >= coalesce((select value::timestamptz from trk.settings where key = 'go_live'), now())
      on conflict (shipment_id) do nothing`
   );
+  await dropDeletedShipments(tx);
+}
+
+// A shipment deleted in the inventory system before any work started (e.g. the supplier changed it and
+// it will be imported again) simply disappears here, so a re-import under the same name starts clean.
+// Shipments that already have a completed step, counted or stored Renfrew units, or a Shopify transfer
+// stay on the list, marked "Deleted in inventory". Archived inventory shipments are not deleted ones.
+async function dropDeletedShipments(tx) {
+  const archive = (await tx.query("select to_regclass('wh.shipments_archive') is not null as ok"))[0].ok;
+  const gone = await tx.query(
+    `delete from trk.shipments t
+     where not t.ignored
+       and t.s2_at is null and t.s3_at is null and t.s4a_at is null and t.s4b_at is null and t.s5_at is null
+       and not exists (select 1 from wh.shipments s where s.shipment_id = t.shipment_id)
+       ${archive ? 'and not exists (select 1 from wh.shipments_archive a where a.shipment_id = t.shipment_id)' : ''}
+       and not exists (select 1 from trk.renfrew_checks c where c.shipment_id = t.shipment_id and (c.counted_qty > 0 or c.put_qty > 0))
+       and not exists (select 1 from trk.renfrew_stock st where st.shipment_id = t.shipment_id)
+       and not exists (select 1 from trk.shopify_transfers x where x.shipment_id = t.shipment_id)
+     returning t.shipment_id`
+  );
+  if (gone.length) {
+    await tx.query('delete from trk.renfrew_checks where shipment_id = any($1::text[])', [gone.map((r) => r.shipment_id)]);
+  }
 }
 
 // Track a shipment on demand (e.g. Qty Confirmed pressed in the inventory system for an older shipment)
